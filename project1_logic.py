@@ -136,15 +136,40 @@ def detect_simulation_intent(user_input, client):
         return {"type": "none"}
 
 def interpret_result_with_gpt(prob, client, cancer_type="암"):
-    percent = round(prob, 1)
-    if percent < 20: risk_level, tone = "낮은", "안심시키는 톤"
-    elif percent < 35: risk_level, tone = "중간", "주의를 주는 톤"
-    else: risk_level, tone = "높은", "경고하는 톤"
+    # [수정] 0.01%라도 나오면 살려내기
+    # prob가 0~100 사이 값으로 들어온다고 가정
+    percent = prob 
+    
+    # 1. 수치가 너무 작으면 최소값 보정 (0.0% 방지)
+    if 0 < percent < 0.1:
+        display_percent = "< 0.1"
+    else:
+        display_percent = f"{round(percent, 1)}"
+    
+    # 2. 위험도 레벨 분류
+    if percent < 20: 
+        risk_level, tone = "낮음 (안심)", "차분하고 친절한 톤"
+    elif percent < 35: 
+        risk_level, tone = "중간 (주의)", "진지하고 조언하는 톤"
+    else: 
+        risk_level, tone = "높음 (경고)", "강력하게 경고하는 톤"
 
-    system_prompt = f"의료 AI로서 {cancer_type} 위험도({percent}%)를 설명해줘. 위험도: {risk_level}, 말투: {tone}."
+    # 3. GPT에게 상황 설명 (프롬프트 강화)
+    # 단순히 숫자만 주는 게 아니라, '술 담배를 하는데도 낮게 나왔다'는 맥락을 줌
+    system_prompt = f"""
+    너는 헬스케어 전문가야. 
+    사용자의 {cancer_type} 위험도는 {display_percent}%야. (수준: {risk_level})
+    
+    [중요 가이드]
+    1. 수치가 낮더라도, 사용자가 '술/담배' 등 나쁜 습관이 있다면 "지금은 젊어서 괜찮지만 나중에 위험해질 수 있다"고 따끔하게 조언해줘.
+    2. 수치가 0%에 가까우면 "현재로선 매우 건강하지만 방심하지 마세요"라고 해줘.
+    3. 절대 "0%니까 막 살아도 된다"는 식의 뉘앙스는 풍기지 마.
+    """
+    
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"{percent}%"}],
+        messages=[{"role": "system", "content": system_prompt}, 
+                  {"role": "user", "content": f"내 위험도는 {display_percent}%입니다."}],
     )
     return response.choices[0].message.content, percent
 
