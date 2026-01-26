@@ -21,8 +21,29 @@ if 'step' not in st.session_state:
 
 # --- 2. 사이드바 (실시간 대시보드) ---
 with st.sidebar:
-    st.header("📋 수집된 건강 정보")
-    st.table(pd.Series(st.session_state.collected_data, name="Value"))
+    st.subheader("📋 입력 정보 확인")
+
+    checklist_area = st.empty()
+
+    def render_checklist():
+        check_items = {
+            "Age": "나이",
+            "Gender": "성별",
+            "BMI": "BMI(또는 키와 몸무게)",
+            "Smoking": "흡연 여부",
+            "Alcohol": "음주 빈도",
+            "Family History": "가족력",
+            "Physical Activity": "운동량"
+        }
+
+        with checklist_area.container():
+            for label, key in check_items.items():
+                value = st.session_state.collected_data.get(key)
+                status = "⬜" if value is None else "✅"
+                st.write(f"{status} {label}")
+
+    render_checklist()
+
     if st.button("🔄 상담 초기화"):
         st.session_state.clear()
         st.rerun()
@@ -45,6 +66,9 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
         if extracted:
             for k, v in extracted.items():
                 if v is not None: st.session_state.collected_data[k] = v
+            
+            # rerun 없이 체크 즉시 갱신
+            render_checklist()
         
         # B. 상태별 분기 로직 (Orchestrator)
         missing = [k for k, v in st.session_state.collected_data.items() if v is None]
