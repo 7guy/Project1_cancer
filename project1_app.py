@@ -1,6 +1,6 @@
 import streamlit as st
 from openai import OpenAI
-from project1_logic import gpt_extraction, generate_ask_question, interpret_result_with_gpt, model
+from project1_logic import gpt_extraction, generate_ask_question, interpret_result_with_gpt, run_cancer_agent,  model, MODELS
 import pandas as pd
 import os
 from dotenv import load_dotenv
@@ -59,6 +59,12 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
+
+    response_text, updated_session = run_cancer_agent(
+        prompt, 
+        st.session_state.agent_session, 
+        client
+    )
 
     with st.chat_message("assistant"):
         # A. 정보 추출

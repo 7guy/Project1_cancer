@@ -5,7 +5,85 @@ from openai import OpenAI
 
 # 모델 로드 (경로 주의)
 MODEL_PATH = r"sub1_cancer_model.pkl"
+MODEL_PATH_LIVER = r"liver_cancer_xgb_model.pkl"##
+MODEL_PATH_LUNG = r"lung_xgb_model.pkl"##
+model= joblib.load(MODEL_PATH)
+
+MODELS = {
+    "간암": joblib.load(MODEL_PATH_LIVER),
+    "폐암": joblib.load(MODEL_PATH_LUNG)
+}
+
 model = joblib.load(MODEL_PATH)
+liver_model = joblib.load(MODEL_PATH_LIVER)##
+lung_model = joblib.load(MODEL_PATH_LUNG)##
+
+
+## 모델별 피쳐
+FEATURE_CONFIG = {
+    "간암" : ['age', 'gender', 'bmi', 'alcohol_consumption', 'smoking_status',
+        'hepatitis_b', 'hepatitis_c','cirrhosis_history',
+        'family_history_cancer', 'physical_activity_level', 'diabetes'],
+
+    "폐암": ["Age", "Gender", "Alcohol use", "Dust Allergy", "OccuPational Hazards",
+            "Genetic Risk", "chronic Lung Disease", "Balanced Diet", "Obesity",
+            "Smoking", "Passive Smoker", "Dry Cough"]
+}
+
+## 암종 분류 함수
+## app 파일에 추가 필요
+def classify_cancer_type(user_input, client):
+    prompt = f"""
+    사용자의 입력 문장을 보고 분석하고자 하는 암의 종류를 분류하세요.
+    반드시 [간암, 폐암, unknown] 중 하나만 출력하세요.
+    사용자 문장: "{user_input}"
+    """
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
+
+
+
+# 메인 에이전트 컨트롤러
+def run_cancer_agent(user_input, session_data, client):
+    """
+    session_data: {'cancer_type': None, 'collected_data': {}, 'history': []}
+    """
+    # 암종 분류
+    if not session_data.get("cancer_type"):
+        cancer_type = classify_cancer_type(user_input, client)
+        if cancer_type == "unknown":
+            return "안녕하세요! 간암과 폐암 중 어떤 암을 분석해 드릴까요?", session_data
+        
+        session_data["cancer_type"] = cancer_type
+        # 선택된 암종에 맞춰 데이터셋 초기화 및 Default 값 설정
+        session_data["collected_data"] = {k: None for k in FEATURE_CONFIG[cancer_type]}
+        for d_key in ["hepatitis_b", "hepatitis_c", "cirrhosis_history"]:
+            if d_key in session_data["collected_data"]:
+                session_data["collected_data"][d_key] = 0
+        
+        return f"**{cancer_type}** 분석을 위해 정보를 수집할게요. {user_input}에 대해 더 자세히 말씀해 주시겠어요?", session_data
+
+    # 정보 추출
+    c_type = session_data["cancer_type"]
+    extracted = gpt_extraction(c_type, session_data["history"], user_input, client)
+    if extracted:
+        for k, v in extracted.items():
+            if v is not None: session_data["collected_data"][k] = v
+
+    # 예측 또는 추가 질문
+    missing_keys = [k for k, v in session_data["collected_data"].items() if v is None]
+    
+    if not missing_keys:
+        input_df = pd.DataFrame([session_data["collected_data"]])[FEATURE_CONFIG[c_type]]
+        prob = MODELS[c_type].predict_proba(input_df)[0][1]
+        return interpret_result_with_gpt(prob, client, c_type), session_data
+    else:
+        return generate_ask_question(c_type, session_data["collected_data"], missing_keys), session_data
+
+#---------------------------------------------------------------------------------
 
 def gpt_extraction(history, user_input, client):
     system_prompt = """
@@ -57,6 +135,7 @@ def interpret_result_with_gpt(prob, client, cancer_type="암"):
 
     system_prompt = f"""너는 의료 AI 상담 보조야. {cancer_type} 위험도 결과를 설명해줘.
     위험도 수준: {risk_level}, 말투: {tone}. 확률 기반 예측이며 진단이 아님을 명시할 것."""
+
     
     response = client.chat.completions.create(
         model="gpt-4o",
