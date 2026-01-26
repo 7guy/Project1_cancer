@@ -3,7 +3,6 @@ import pandas as pd
 import joblib
 from openai import OpenAI
 
-# 모델 로드 (경로 주의)
 MODEL_PATH = r"sub1_cancer_model.pkl"
 model = joblib.load(MODEL_PATH)
 
@@ -15,19 +14,38 @@ def gpt_extraction(history, user_input, client):
     반드시 JSON 형식 {"Age": 50, ...}만 출력해. 추출할 수 없으면 null로 채워.
     """
     messages = [{"role": "system", "content": system_prompt}]
-    # 최근 대화 문맥 5개까지만 전달하여 효율성 높임
     messages.extend(history[-5:])
     messages.append({"role": "user", "content": user_input})
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # 속도를 위해 mini 권장
+            model="gpt-4o-mini",
             messages=messages,
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content)
-    except Exception as e:
+    except Exception:
         return None
+
+def validate_extracted(extracted):
+    if not extracted:
+        return extracted
+    if extracted.get("Age") is not None and not (0 < extracted["Age"] < 120):
+        extracted["Age"] = None
+    if extracted.get("BMI") is not None and not (10 < extracted["BMI"] < 60):
+        extracted["BMI"] = None
+    if extracted.get("PhysicalActivity") is not None and not (0 <= extracted["PhysicalActivity"] <= 10):
+        extracted["PhysicalActivity"] = None
+    return extracted
+
+def get_extraction_fail_reason(extracted, input_type):
+    if extracted is None:
+        return "GPT_ERROR"
+    if all(v is None for v in extracted.values()):
+        if input_type == "HEALTH":
+            return "SYMPTOM_ONLY"
+        return "NO_RELEVANT_INFO"
+    return None
 
 def generate_ask_question(collected_data, missing_keys):
     name_map = {
@@ -41,8 +59,7 @@ def generate_ask_question(collected_data, missing_keys):
             questions.append("BMI 또는 키(cm)와 몸무게(kg)를 알려주세요.")
         else:
             questions.append(f"{name_map[key]}를 알려주세요.")
-            
-    return "암 위험도 분석을 위해 아래 정보가 더 필요해요. 😊\n\n" + "\n".join(
+    return "암 발병 위험도 분석을 위해 아래 정보가 더 필요해요. 😊\n\n" + "\n".join(
         f"- {q}" for q in questions
     )
 
@@ -68,15 +85,14 @@ def interpret_result_with_gpt(prob, client, cancer_type="암"):
 def contains_abuse(text: str) -> bool:
     abuse_words = [
         "시발", "씨발", "ㅅㅂ", "병신", "미친", "좆", "엿같",
-        "개같", "꺼져", "존나", "ㅈㄴ", "fuck", "shit"
+        "개같", "꺼져", "존나", "ㅈㄴ", "fuck", "shit", "tlqkf"
     ]
     text = text.lower()
     return any(word in text for word in abuse_words)
 
 def classify_user_input(user_input: str):
     text = user_input.lower()
-    
-    # 1. 비속어 최우선 처리
+
     if contains_abuse(text):
         return "ABUSE"
 
@@ -84,7 +100,7 @@ def classify_user_input(user_input: str):
     health_keywords = [
         "아파", "피곤", "기침", "숨", "통증",
         "몸이", "컨디션", "불편", "증상",
-        "잠", "불면", "수면", "잠을", "잠이", "못자", "못 자", "어지러워"
+        "잠", "불면", "수면", "못자", "어지러워", "근육통", "지쳐", "힘"
     ]
 
     if any(g in text for g in greetings):
@@ -95,11 +111,7 @@ def classify_user_input(user_input: str):
 
     return "OTHER"
 
-
 def is_extraction_failed(extracted: dict):
-    """
-    GPT 추출 결과가 있으나 모든 값이 None인 경우
-    """
     if not extracted:
         return True
     return all(v is None for v in extracted.values())
