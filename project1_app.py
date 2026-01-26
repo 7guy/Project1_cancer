@@ -1,83 +1,127 @@
 import streamlit as st
-from openai import OpenAI
-from project1_logic import gpt_extraction, generate_ask_question, interpret_result_with_gpt, model
 import pandas as pd
 import os
 from dotenv import load_dotenv
+from openai import OpenAI
+
+# 로직 파일 연동
+from project1_logic import (
+    gpt_extraction, 
+    generate_ask_question, 
+    interpret_result_with_gpt, 
+    predict_cancer_risk,       
+    simulate_lifestyle_change, 
+    detect_simulation_intent,  
+    normalize_keys,
+    determine_automatic_context # 라우터 함수
+)
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-st.set_page_config(page_title="AI 암 진단 챗봇", layout="wide")
-st.title("🩺 AI 암 발병 위험도 진단 서비스")
+st.set_page_config(page_title="AI 통합 암 진단 에이전트", layout="centered") # 중앙 정렬
 
-# --- 1. 세션 상태 초기화 ---
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'collected_data' not in st.session_state:
-    st.session_state.collected_data = {k: None for k in ["Age", "Gender", "BMI", "Smoking", "Alcohol", "Family_History", "PhysicalActivity"]}
-if 'step' not in st.session_state:
-    st.session_state.step = "COLLECTING"
+# --- [상단] 헤더 및 상태 표시 ---
+st.title("🩺 AI 헬스케어 에이전트")
+st.caption("버튼 없이 대화로만 진단하고 시뮬레이션까지 가능한 AI입니다.")
 
-# --- 2. 사이드바 (실시간 대시보드) ---
+# 세션 초기화
+if 'messages' not in st.session_state: st.session_state.messages = []
+if 'collected_data' not in st.session_state: st.session_state.collected_data = {}
+if 'context' not in st.session_state: st.session_state.context = "일반"
+if 'last_risk_score' not in st.session_state: st.session_state.last_risk_score = None 
+
+# 현재 상태를 작게 보여줌 (사이드바 대신 상단에 배치해도 됨, 혹은 사이드바는 정보창으로만 사용)
 with st.sidebar:
-    st.header("📋 수집된 건강 정보")
-    st.table(pd.Series(st.session_state.collected_data, name="Value"))
-    if st.button("🔄 상담 초기화"):
+    st.header(f"현재 모드: {st.session_state.context}암 분석 중")
+    st.info("💡 팁: '폐암 봐줘', '간암은 어때?' 라고 말하면 모드가 바뀝니다.")
+    
+    st.subheader("📋 현재 파악된 정보")
+    if st.session_state.collected_data:
+        st.json(st.session_state.collected_data)
+    else:
+        st.write("아직 정보가 없습니다.")
+        
+    if st.button("🗑️ 기억 지우기 (초기화)"):
         st.session_state.clear()
         st.rerun()
 
-# --- 3. 대화 내용 출력 ---
+# --- [메인] 대화창 ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 4. 사용자 입력 및 총괄 로직 (Orchestrator) ---
-if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
-    # 유저 메시지 저장 및 출력
+# --- [핵심] 사용자 입력 처리 ---
+if prompt := st.chat_input("예: 24살 여자고 운동 매일 해. 폐암 확률은?"):
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. 정보 추출
-        extracted = gpt_extraction(st.session_state.messages, prompt, client)
-        if extracted:
-            for k, v in extracted.items():
-                if v is not None: st.session_state.collected_data[k] = v
+        response = ""
+
+        # 1. [라우팅] 사용자의 말에서 모드(Context) 자동 결정
+        new_context = determine_automatic_context(prompt, st.session_state.context)
+        if new_context != st.session_state.context:
+            st.session_state.context = new_context
+            st.toast(f"🔄 {new_context}암 분석 모드로 전환되었습니다!") # 토스트 메시지로 세련되게 알림
+
+        # 2. [의도 파악] 시뮬레이션인가?
+        sim_intent = detect_simulation_intent(prompt, client)
         
-        # B. 상태별 분기 로직 (Orchestrator)
-        missing = [k for k, v in st.session_state.collected_data.items() if v is None]
-        
-        if st.session_state.step == "COLLECTING":
+        if sim_intent.get("type") == "simulation":
+            # 시뮬레이션 로직
+            if st.session_state.last_risk_score is None:
+                # 점수가 없으면 현재 데이터로 즉석 계산해서 기준점 잡기
+                st.session_state.last_risk_score = predict_cancer_risk(st.session_state.context, st.session_state.collected_data)
+            
+            cur, new, diff = simulate_lifestyle_change(
+                st.session_state.context,
+                st.session_state.collected_data,
+                sim_intent.get("changes"),
+                st.session_state.last_risk_score
+            )
+            
+            diff_text = "감소" if diff < 0 else "증가"
+            changes_str = ", ".join([f"{k}: {v}" for k, v in sim_intent.get('changes').items()])
+            
+            response = f"""
+            📊 **가상 시뮬레이션 ({st.session_state.context}암)**
+            
+            조건 변경 (**{changes_str}**) 결과입니다:
+            - 현재 위험도: **{cur:.1f}%**
+            - 🔮 예상 위험도: **{new:.1f}%**
+            
+            약 **{abs(diff):.1f}% 포인트 {diff_text}**할 것으로 보입니다.
+            """
+
+        else:
+            # 3. [정보 수집 및 예측]
+            # (1) 정보 추출 및 저장 (기존 정보에 덮어쓰기 -> 누적됨)
+            extracted = gpt_extraction(st.session_state.messages, prompt, client)
+            if extracted:
+                normalized = normalize_keys(extracted)
+                st.session_state.collected_data.update(normalized)
+
+            # (2) 필수 정보 체크
+            if st.session_state.context == "일반": check = ["Age", "Gender", "BMI", "Smoking", "Alcohol"]
+            elif st.session_state.context == "폐": check = ["Age", "Gender", "Smoking"]
+            else: check = ["Age", "Gender", "Alcohol"]
+
+            missing = [k for k in check if st.session_state.collected_data.get(k) is None]
+
             if missing:
-                # 정보가 부족하면 자연스러운 질문 생성
+                # 정보가 부족하면 질문
                 response = generate_ask_question(st.session_state.collected_data, missing)
             else:
-                # 모든 정보 수집 완료 -> 모델 호출
-                st.write("🔄 모든 정보가 수집되었습니다. 분석 중입니다...")
-                data = st.session_state.collected_data
-                input_df = pd.DataFrame([{
-                    'Age': data['Age'], 'Gender': data['Gender'], 'BMI': data['BMI'],
-                    'Smoking': data['Smoking'], 'Alcohol': data['Alcohol'],
-                    'Family_History': 1 if data['Family_History'] > 0 else 0,
-                    'PhysicalActivity': data['PhysicalActivity']
-                }])
-                prob = model.predict_proba(input_df)[0][1]
-                
-                # 결과 해석 (GPT)
-                response = interpret_result_with_gpt(prob, client)
-                response += "\n\n**추가적인 상담이 필요하시다면 간암이나 위암 정밀 진단도 가능합니다. 계속할까요?**"
-                st.session_state.step = "ASK_ADDITIONAL"
-        
-        elif st.session_state.step == "ASK_ADDITIONAL":
-            # 의도 파악 로직 (간단히 구현)
-            if any(word in prompt for word in ["응", "네", "해줘", "좋아", "간암", "위암"]):
-                response = "알겠습니다. 정밀 진단을 위해 추가 정보를 확인하겠습니다. (로직 확장 가능)"
-                # 여기서 step을 LIVER 등으로 전환 가능
-            else:
-                response = "상담을 종료합니다. 건강한 하루 되세요!"
-                st.session_state.step = "FINISHED"
+                # 정보가 충분하면 예측
+                with st.spinner(f"{st.session_state.context}암 분석 중..."):
+                    prob = predict_cancer_risk(st.session_state.context, st.session_state.collected_data)
+                    gpt_msg, score = interpret_result_with_gpt(prob, client, st.session_state.context + "암")
+                    st.session_state.last_risk_score = score
+                    response = gpt_msg
+                    response += "\n\n--- \n💡 *'담배 끊으면?'*, *'간암은 어때?'* 처럼 자유롭게 말씀해주세요."
 
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
