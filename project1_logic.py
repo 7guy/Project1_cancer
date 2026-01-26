@@ -50,7 +50,7 @@ def interpret_result_with_gpt(prob, client, cancer_type="암"):
     percent = round(prob * 100, 1)
     if percent < 20:
         risk_level, tone = "낮은", "안심시키는 톤으로 설명"
-    elif percent < 40:
+    elif percent < 35:
         risk_level, tone = "중간", "주의를 주되, 과도한 불안은 주지 말 것"
     else:
         risk_level, tone = "높은", "조심스럽게 위험 신호를 전달하되 공포 조성 금지"
