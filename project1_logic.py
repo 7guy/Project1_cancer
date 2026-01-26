@@ -3,11 +3,10 @@ import pandas as pd
 import joblib
 from openai import OpenAI
 
-# 모델 로드 (경로 주의)
+# 모델 로드 (경로 유지)
 MODEL_PATH = r"sub1_cancer_model.pkl"
-MODEL_PATH_LIVER = r"liver_cancer_xgb_model.pkl"##
-MODEL_PATH_LUNG = r"lung_xgb_model.pkl"##
-model= joblib.load(MODEL_PATH)
+MODEL_PATH_LIVER = r"liver_cancer_xgb_model.pkl"
+MODEL_PATH_LUNG = r"lung_xgb_model.pkl"
 
 MODELS = {
     "간암": joblib.load(MODEL_PATH_LIVER),
@@ -15,14 +14,13 @@ MODELS = {
 }
 
 model = joblib.load(MODEL_PATH)
-liver_model = joblib.load(MODEL_PATH_LIVER)##
-lung_model = joblib.load(MODEL_PATH_LUNG)##
-
+liver_model = joblib.load(MODEL_PATH_LIVER)
+lung_model = joblib.load(MODEL_PATH_LUNG)
 
 ## 모델별 피쳐
 FEATURE_CONFIG = {
     "간암" : ['age', 'gender', 'bmi', 'alcohol_consumption', 'smoking_status',
-        'hepatitis_b', 'hepatitis_c','cirrhosis_history',
+        'hepatitis_b', 'hepatitis_c', 'cirrhosis_history',
         'family_history_cancer', 'physical_activity_level', 'diabetes'],
 
     "폐암": ["Age", "Gender", "Alcohol use", "Dust Allergy", "OccuPational Hazards",
@@ -30,8 +28,49 @@ FEATURE_CONFIG = {
             "Smoking", "Passive Smoker", "Dry Cough"]
 }
 
+# 추가된 시나리오 분석 함수
+def handle_scenario_analysis(user_input, current_data, cancer_type, client):
+    """기존 데이터를 복사하여 가상의 시나리오 수치로 비교 예측 수행"""
+    # 1. 시뮬레이션 데이터 준비 (원본 보존)
+    scenario_data = current_data.copy()
+    features = FEATURE_CONFIG[cancer_type]
+    
+    # 2. GPT를 통해 어떤 수치를 변경할지 추출
+    sim_prompt = f"""
+    사용자의 가상 질문에서 변경하고 싶어하는 수치를 추출해 JSON으로 반환해.
+    가능한 변수명: {features}
+    현재 데이터: {current_data}
+    반드시 JSON {{"변수명": 값}} 형식만 출력해.
+    예: "담배 끊으면?" -> {{"Smoking": 0}} 또는 {{"smoking_status": 0}}
+    """
+    sim_response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": sim_prompt}],
+        response_format={"type": "json_object"}
+    )
+    changes = json.loads(sim_response.choices[0].message.content)
+    scenario_data.update(changes)
+
+    # 3. 비교 예측 수행
+    orig_df = pd.DataFrame([current_data])[features]
+    scen_df = pd.DataFrame([scenario_data])[features]
+    
+    orig_prob = MODELS[cancer_type].predict_proba(orig_df)[0][1]
+    scen_prob = MODELS[cancer_type].predict_proba(scen_df)[0][1]
+    
+    diff = (orig_prob - scen_prob) * 100
+    
+    # 4. 결과 메시지 생성
+    if diff > 0:
+        msg = f"현재 위험도는 {orig_prob*100:.1f}%입니다. 만약 말씀하신 대로 습관을 개선하시면 위험도가 **{scen_prob*100:.1f}%**로 약 **{diff:.1f}%p 낮아질 것으로 예측**됩니다! ✨"
+    elif diff < 0:
+        msg = f"현재 위험도는 {orig_prob*100:.1f}%입니다. 하지만 해당 조건이 적용되면 위험도는 **{scen_prob*100:.1f}%**로 높아질 위험이 있습니다. ⚠️"
+    else:
+        msg = f"해당 변화는 예측 수치에 큰 영향을 주지 않지만, 꾸준한 관리가 중요합니다. (예상 확률: {scen_prob*100:.1f}%)"
+    
+    return msg
+
 ## 암종 분류 함수
-## app 파일에 추가 필요
 def classify_cancer_type(user_input, client):
     prompt = f"""
     사용자의 입력 문장을 보고 분석하고자 하는 암의 종류를 분류하세요.
@@ -44,13 +83,8 @@ def classify_cancer_type(user_input, client):
     )
     return response.choices[0].message.content.strip()
 
-
-
-# 메인 에이전트 컨트롤러
+# 에이전트 컨트롤러
 def run_cancer_agent(user_input, session_data, client):
-    """
-    session_data: {'cancer_type': None, 'collected_data': {}, 'history': []}
-    """
     # 암종 분류
     if not session_data.get("cancer_type"):
         cancer_type = classify_cancer_type(user_input, client)
@@ -58,7 +92,6 @@ def run_cancer_agent(user_input, session_data, client):
             return "안녕하세요! 간암과 폐암 중 어떤 암을 분석해 드릴까요?", session_data
         
         session_data["cancer_type"] = cancer_type
-        # 선택된 암종에 맞춰 데이터셋 초기화 및 Default 값 설정
         session_data["collected_data"] = {k: None for k in FEATURE_CONFIG[cancer_type]}
         for d_key in ["hepatitis_b", "hepatitis_c", "cirrhosis_history"]:
             if d_key in session_data["collected_data"]:
@@ -77,12 +110,18 @@ def run_cancer_agent(user_input, session_data, client):
     missing_keys = [k for k, v in session_data["collected_data"].items() if v is None]
     
     if not missing_keys:
+        # --- [추가] 시나리오 분석 트리거 판단 ---
+        scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
+        if any(word in user_input for word in scenario_keywords):
+            comparison_result = handle_scenario_analysis(user_input, session_data["collected_data"], c_type, client)
+            return comparison_result, session_data
+        
+        # 일반 결과 도출
         input_df = pd.DataFrame([session_data["collected_data"]])[FEATURE_CONFIG[c_type]]
         prob = MODELS[c_type].predict_proba(input_df)[0][1]
         return interpret_result_with_gpt(prob, client, c_type), session_data
     else:
-        return generate_ask_question(c_type, session_data["collected_data"], missing_keys), session_data
-
+        return generate_ask_question(session_data["collected_data"], missing_keys), session_data
 #---------------------------------------------------------------------------------
 
 def gpt_extraction(history, user_input, client):
