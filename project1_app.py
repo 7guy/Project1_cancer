@@ -9,7 +9,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.set_page_config(page_title="AI 암 진단 챗봇", layout="wide")
-st.title("🩺 AI 암 발병 위험도 진단 서비스")
+st.title("🩺 AI 암 발병 위험도 판단 서비스")
 
 # --- 1. 세션 상태 초기화 ---
 if 'messages' not in st.session_state:
@@ -32,12 +32,12 @@ with st.sidebar:
             "BMI": "BMI(또는 키와 몸무게)",
             "Smoking": "흡연 여부",
             "Alcohol": "음주 빈도",
-            "Family History": "가족력",
-            "Physical Activity": "운동량"
+            "Family_History": "가족력",
+            "PhysicalActivity": "운동량"
         }
 
         with checklist_area.container():
-            for label, key in check_items.items():
+            for key, label in check_items.items():
                 value = st.session_state.collected_data.get(key)
                 status = "⬜" if value is None else "✅"
                 st.write(f"{status} {label}")
@@ -65,14 +65,15 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
         extracted = gpt_extraction(st.session_state.messages, prompt, client)
         if extracted:
             for k, v in extracted.items():
-                if v is not None: st.session_state.collected_data[k] = v
-            
+                if k in st.session_state.collected_data and v is not None:
+                    st.session_state.collected_data[k] = v 
             # rerun 없이 체크 즉시 갱신
             render_checklist()
         
         # B. 상태별 분기 로직 (Orchestrator)
         missing = [k for k, v in st.session_state.collected_data.items() if v is None]
         
+        # step 1 : 필수 건강 정보 수집 단계
         if st.session_state.step == "COLLECTING":
             if missing:
                 # 정보가 부족하면 자연스러운 질문 생성
@@ -91,17 +92,79 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
                 
                 # 결과 해석 (GPT)
                 response = interpret_result_with_gpt(prob, client)
-                response += "\n\n**추가적인 상담이 필요하시다면 간암이나 위암 정밀 진단도 가능합니다. 계속할까요?**"
+                response += "\n\n**추가적인 상담이 필요하시다면 간암이나 폐암 정밀 상담도 가능합니다. 계속할까요?**"
                 st.session_state.step = "ASK_ADDITIONAL"
         
+        # step 2 : 결과 이후 추가 상담 의사 확인
         elif st.session_state.step == "ASK_ADDITIONAL":
-            # 의도 파악 로직 (간단히 구현)
-            if any(word in prompt for word in ["응", "네", "해줘", "좋아", "간암", "위암"]):
-                response = "알겠습니다. 정밀 진단을 위해 추가 정보를 확인하겠습니다. (로직 확장 가능)"
-                # 여기서 step을 LIVER 등으로 전환 가능
-            else:
-                response = "상담을 종료합니다. 건강한 하루 되세요!"
+            positive = ["응", "네", "해줘", "좋아", "할게", "계속"]
+            negative = ["아니", "괜찮아", "종료", "그만"]
+            if any(word in prompt for word in positive):
+                # 사용자가 추가 상담 의사 표시 → FOLLOW_UP 단계로 이동
+                response = (
+                    "좋아요 😊\n"
+                    "어떤 상담을 원하시나요?\n"
+                    "- **간암 정밀 상담**\n"
+                    "- **폐암 정밀 상담**\n\n"
+                    "또는 생활습관을 바꿨을 때의 영향도 질문할 수 있어요."
+                )
+                st.session_state.step = "FOLLOW_UP"
+
+            elif any(word in prompt for word in negative):
+                response = (
+                    "상담을 종료합니다. 언제든 다시 이용해 주세요 🙂\n\n"
+                    "👉 새 상담을 원하시면 왼쪽의 **상담 초기화** 버튼을 눌러주세요."
+                )
                 st.session_state.step = "FINISHED"
+                
+            else:
+                # 의도가 불명확하면 종료하지 않고 다시 안내
+                response = (
+                    "추가 상담을 도와드릴 수 있어요.\n"
+                    "**간암**, **폐암** 중 원하시는 상담을 말씀해 주세요.\n"
+                    "또는 '종료'라고 입력하셔도 됩니다."
+                )
+
+        # step 3 : 추가 질문(FOLLOW_UP) 대기 및 분기 단계
+        elif st.session_state.step == "FOLLOW_UP":
+            # 언제든 종료 가능
+            if any(word in prompt for word in ["종료", "그만", "괜찮아"]):
+                response = (
+                    "상담을 종료합니다. 언제든 다시 이용해 주세요 🙂\n\n"
+                    "👉 새 상담을 원하시면 왼쪽의 **상담 초기화** 버튼을 눌러주세요."
+                )
+                st.session_state.step = "FINISHED"
+
+            # 간암 정밀 상담
+            elif "간암" in prompt:
+                response = (
+                    "간암 정밀 상담을 시작할게요.\n\n"
+                    "최근 간염, 간경화, 지방간 진단을 받은 적이 있나요?"
+                )
+
+            # 폐암 정밀 상담
+            elif "폐암" in prompt:
+                response = (
+                    "폐암 정밀 상담을 시작할게요.\n\n"
+                    "현재 흡연 중이신가요? 또는 과거 흡연 이력이 있나요?"
+                )
+
+            # 그 외
+            else:
+                response = (
+                    "추가 상담을 도와드릴 수 있어요.\n\n"
+                    "**간암**, **폐암** 중 하나를 선택하시거나\n"
+                    "'종료'라고 입력하시면 상담을 마칠 수 있어요."
+                )
+
+
+        # step 4 : 상담 종료 단계
+        elif st.session_state.step == "FINISHED":
+            response = (
+                "상담을 종료합니다. 언제든 다시 이용해 주세요 🙂\n\n"
+                "👉 새 상담을 원하시면 왼쪽의 **상담 초기화** 버튼을 눌러주세요."
+            )
+
 
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
