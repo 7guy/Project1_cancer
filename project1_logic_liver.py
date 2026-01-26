@@ -4,7 +4,7 @@ import joblib
 from openai import OpenAI
 
 # 모델 로드 (경로 주의)
-MODEL_PATH = r"model1/sub1_cancer_model.pkl"
+MODEL_PATH = r"model1\liver_cancer_xgb_model.pkl"
 model = joblib.load(MODEL_PATH)
 
 def gpt_extraction(history, user_input, client):

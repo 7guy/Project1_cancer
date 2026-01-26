@@ -4,17 +4,18 @@ import joblib
 from openai import OpenAI
 
 # 모델 로드 (경로 주의)
-MODEL_PATH = r"model1/sub1_cancer_model.pkl"
+MODEL_PATH = r"Pmodel1\lung_xgb_model.pkl"
 model = joblib.load(MODEL_PATH)
 
 def gpt_extraction(history, user_input, client):
-    system_prompt = """
-    너는 암 예측 모델을 위한 데이터 추출기야. 사용자의 입력에서 정보를 추출해서 JSON으로 반환해.
-    필드: Age(정수), Gender(0:남, 1:여), BMI(실수), Smoking(0:No, 1:Yes), Alcohol(0~5), Family_History(정수), PhysicalActivity(0~10)
+    system_prompt_lug = """
+    너는 폐암 예측 모델을 위한 데이터 추출기야. 사용자의 입력에서 정보를 추출해서 JSON으로 반환해.
+    필수 필드: Age(정수), Gender(0:남, 1:여), BMI(실수), Smoking(0:No, 1:Yes), Alcohol(0~5), Family_History(정수), PhysicalActivity(0~10)
     키와 몸무게를 말하면 BMI를 계산해. (몸무게kg / 키m^2)
+    선택 필드: Air Pollution(), 
     반드시 JSON 형식 {"Age": 50, ...}만 출력해. 추출할 수 없으면 null로 채워.
     """
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": system_prompt_lug}]
     # 최근 대화 문맥 5개까지만 전달하여 효율성 높임
     messages.extend(history[-5:])
     messages.append({"role": "user", "content": user_input})
