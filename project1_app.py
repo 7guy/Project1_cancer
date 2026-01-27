@@ -14,7 +14,7 @@ st.title("🩺 AI 암 발병 위험도 진단 서비스")
 # --- 1. 세션 상태 초기화 ---
 if 'messages' not in st.session_state:
     st.session_state.messages = []
-if 'agent_session' not in st.session_state: 
+if 'agent_session' not in st.session_state: # 로직 엔진과 상태를 공유하기 위한 통합 세션
     st.session_state.agent_session = {"cancer_type": None, "collected_data": {}, "history": []}
 if 'collected_data' not in st.session_state:
     st.session_state.collected_data = {k: None for k in ["Age", "Gender", "BMI", "Smoking", "Alcohol", "Family_History", "PhysicalActivity"]}
@@ -28,22 +28,20 @@ with st.sidebar:
     checklist_area = st.empty()
 
     def render_checklist():
+        # 암종이 정해지면 해당 암종의 피처 리스트를 가져옴
         current_type = st.session_state.agent_session.get("cancer_type")
         if current_type:
             check_items = {k: k for k in FEATURE_CONFIG.get(current_type, [])}
         else:
             check_items = {
-                "Age": "나이",
-                "Gender": "성별",
-                "BMI": "BMI(또는 키와 몸무게)",
-                "Smoking": "흡연 여부",
-                "Alcohol": "음주 빈도",
-                "Family History": "가족력",
-                "Physical Activity": "운동량"
+                "Age": "나이", "Gender": "성별", "BMI": "BMI(또는 키와 몸무게)",
+                "Smoking": "흡연 여부", "Alcohol": "음주 빈도",
+                "Family History": "가족력", "Physical Activity": "운동량"
             }
 
         with checklist_area.container():
             for label, key in check_items.items():
+
                 value = st.session_state.agent_session["collected_data"].get(key)
                 status = "⬜" if value is None else "✅"
                 st.write(f"{status} {label}")
@@ -65,14 +63,14 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 통합 로직 엔진 호출
+    #암종 분류, 데이터 추출, 시나리오 분석
     response_text, updated_session = run_cancer_agent(
         prompt, 
         st.session_state.agent_session, 
         client
     )
     
-    # 세션 상태 동기화
+    #세션에 반영
     st.session_state.agent_session = updated_session
     st.session_state.collected_data = updated_session["collected_data"]
 
@@ -85,13 +83,14 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
             if missing:
                 response = response_text
             else:
-                # 정보 수집 완료 후 시나리오 키워드 확인
+                #시나리오 분석
                 scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
                 if any(word in prompt for word in scenario_keywords):
-                    response = response_text 
+                    response = response_text # 에이전트가 생성한 비교 분석 텍스트 사용
                 else:
                     st.write("🔄 모든 정보가 수집되었습니다. 분석 중입니다...")
                     c_type = st.session_state.agent_session["cancer_type"]
+                    #해당 암종 모델에 필요한 피처만 추출
                     input_df = pd.DataFrame([st.session_state.collected_data])[FEATURE_CONFIG[c_type]]
                     prob = MODELS[c_type].predict_proba(input_df)[0][1]
                     
@@ -100,6 +99,7 @@ if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
                     st.session_state.step = "ASK_ADDITIONAL"
         
         elif st.session_state.step == "ASK_ADDITIONAL":
+            #추가 상담에서 시나리오 분석
             scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
             if any(word in prompt for word in scenario_keywords):
                 response = response_text

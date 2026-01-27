@@ -28,7 +28,7 @@ FEATURE_CONFIG = {
             "Smoking", "Passive Smoker", "Dry Cough"]
 }
 
-# 추가된 시나리오 분석 함수
+## 추가 분석 함수
 def handle_scenario_analysis(user_input, current_data, cancer_type, client):
     """기존 데이터를 복사하여 가상의 시나리오 수치로 비교 예측 수행"""
     # 1. 시뮬레이션 데이터 준비 (원본 보존)
@@ -101,6 +101,7 @@ def run_cancer_agent(user_input, session_data, client):
 
     # 정보 추출
     c_type = session_data["cancer_type"]
+
     extracted = gpt_extraction(c_type, session_data["history"], user_input, client)
     if extracted:
         for k, v in extracted.items():
@@ -110,8 +111,8 @@ def run_cancer_agent(user_input, session_data, client):
     missing_keys = [k for k, v in session_data["collected_data"].items() if v is None]
     
     if not missing_keys:
-        # --- [추가] 시나리오 분석 트리거 판단 ---
-        scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
+
+        scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우", "때"]
         if any(word in user_input for word in scenario_keywords):
             comparison_result = handle_scenario_analysis(user_input, session_data["collected_data"], c_type, client)
             return comparison_result, session_data
@@ -122,23 +123,23 @@ def run_cancer_agent(user_input, session_data, client):
         return interpret_result_with_gpt(prob, client, c_type), session_data
     else:
         return generate_ask_question(session_data["collected_data"], missing_keys), session_data
-#---------------------------------------------------------------------------------
 
-def gpt_extraction(history, user_input, client):
-    system_prompt = """
+def gpt_extraction(cancer_type, history, user_input, client):
+    # 해당 암종에 필요한 피처 리스트 가져오기
+    features = FEATURE_CONFIG.get(cancer_type, [])
+    system_prompt = f"""
     너는 암 예측 모델을 위한 데이터 추출기야. 사용자의 입력에서 정보를 추출해서 JSON으로 반환해.
-    필드: Age(정수), Gender(0:남, 1:여), BMI(실수), Smoking(0:No, 1:Yes), Alcohol(0~5), Family_History(정수), PhysicalActivity(0~10)
+    추출해야 할 필드: {features}
     키와 몸무게를 말하면 BMI를 계산해. (몸무게kg / 키m^2)
-    반드시 JSON 형식 {"Age": 50, ...}만 출력해. 추출할 수 없으면 null로 채워.
+    반드시 JSON 형식만 출력해. 추출할 수 없으면 null로 채워.
     """
     messages = [{"role": "system", "content": system_prompt}]
-    # 최근 대화 문맥 5개까지만 전달하여 효율성 높임
     messages.extend(history[-5:])
     messages.append({"role": "user", "content": user_input})
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # 속도를 위해 mini 권장
+            model="gpt-4o-mini",
             messages=messages,
             response_format={"type": "json_object"}
         )
@@ -147,17 +148,21 @@ def gpt_extraction(history, user_input, client):
         return None
 
 def generate_ask_question(collected_data, missing_keys):
+
     name_map = {
-        "Age": "나이", "Gender": "성별", "BMI": "BMI(또는 키와 몸무게)",
-        "Smoking": "흡연 여부", "Alcohol": "음주 빈도",
-        "Family_History": "가족력", "PhysicalActivity": "운동량"
+        "Age": "나이", "age": "나이", "Gender": "성별", "gender": "성별", 
+        "BMI": "BMI(또는 키와 몸무게)", "bmi": "BMI",
+        "Smoking": "흡연 여부", "smoking_status": "흡연 상태",
+        "Alcohol use": "음주 빈도", "alcohol_consumption": "음주량",
+        "Family_History": "가족력", "family_history_cancer": "암 가족력",
+        "PhysicalActivity": "운동량", "physical_activity_level": "활동량"
     }
     questions = []
     for key in missing_keys:
-        if key == "BMI":
+        if key.lower() == "bmi":
             questions.append("BMI 또는 키(cm)와 몸무게(kg)를 알려주세요.")
         else:
-            questions.append(f"{name_map[key]}를 알려주세요.")
+            questions.append(f"{name_map.get(key, key)}를 알려주세요.")
             
     return "암 위험도 분석을 위해 아래 정보가 더 필요해요. 😊\n\n" + "\n".join(
         f"- {q}" for q in questions
@@ -175,7 +180,7 @@ def interpret_result_with_gpt(prob, client, cancer_type="암"):
     system_prompt = f"""너는 의료 AI 상담 보조야. {cancer_type} 위험도 결과를 설명해줘.
     위험도 수준: {risk_level}, 말투: {tone}. 확률 기반 예측이며 진단이 아님을 명시할 것."""
 
-    
+    #예측 확률 출력
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "system", "content": system_prompt},
