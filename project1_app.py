@@ -1,114 +1,127 @@
 import streamlit as st
-from openai import OpenAI
-from project1_logic import gpt_extraction, generate_ask_question, interpret_result_with_gpt, run_cancer_agent, model, MODELS, FEATURE_CONFIG
-import pandas as pd
 import os
+from openai import OpenAI
 from dotenv import load_dotenv
+
+from project1_logic import (
+    predict_cancer_risk, 
+    get_missing_info_question,
+    gpt_extraction,
+    interpret_result_with_gpt,
+    predict_scenario,
+    detect_simulation_intent 
+)
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-st.set_page_config(page_title="AI 암 진단 챗봇", layout="wide")
-st.title("🩺 AI 암 발병 위험도 진단 서비스")
+st.set_page_config(page_title="AI Cancer Care", layout="wide")
+st.title("🩺 맞춤형 AI 암 위험도 정밀 분석")
 
-# --- 1. 세션 상태 초기화 ---
+# --- 세션 상태 ---
 if 'messages' not in st.session_state:
-    st.session_state.messages = []
-if 'agent_session' not in st.session_state: # 로직 엔진과 상태를 공유하기 위한 통합 세션
-    st.session_state.agent_session = {"cancer_type": None, "collected_data": {}, "history": []}
+    st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 통합 암 발병 위험도 분석을 위해 건강 정보를 알려주세요."}]
 if 'collected_data' not in st.session_state:
-    st.session_state.collected_data = {k: None for k in ["Age", "Gender", "BMI", "Smoking", "Alcohol", "Family_History", "PhysicalActivity"]}
-if 'step' not in st.session_state:
-    st.session_state.step = "COLLECTING"
+    st.session_state.collected_data = {}
+if 'current_cancer' not in st.session_state:
+    st.session_state.current_cancer = "TOTAL"
 
-# --- 2. 사이드바 (실시간 대시보드) ---
+# --- 사이드바 ---
 with st.sidebar:
-    st.subheader("📋 입력 정보 확인")
-
-    checklist_area = st.empty()
-
-    def render_checklist():
-        # 암종이 정해지면 해당 암종의 피처 리스트를 가져옴
-        current_type = st.session_state.agent_session.get("cancer_type")
-        if current_type:
-            check_items = {k: k for k in FEATURE_CONFIG.get(current_type, [])}
-        else:
-            check_items = {
-                "Age": "나이", "Gender": "성별", "BMI": "BMI(또는 키와 몸무게)",
-                "Smoking": "흡연 여부", "Alcohol": "음주 빈도",
-                "Family History": "가족력", "Physical Activity": "운동량"
-            }
-
-        with checklist_area.container():
-            for label, key in check_items.items():
-
-                value = st.session_state.agent_session["collected_data"].get(key)
-                status = "⬜" if value is None else "✅"
-                st.write(f"{status} {label}")
-
-    render_checklist()
-
+    st.header("📊 데이터 현황")
+    st.write(f"**현재 타겟:** {st.session_state.current_cancer}")
+    st.divider()
+    if st.session_state.collected_data:
+        for k, v in st.session_state.collected_data.items():
+            if v is not None: st.write(f"✅ {k}: {v}")
+    
     if st.button("🔄 상담 초기화"):
         st.session_state.clear()
         st.rerun()
 
-# --- 3. 대화 내용 출력 ---
+# --- 대화 화면 ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 4. 사용자 입력 및 총괄 로직 (Orchestrator) ---
-if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
+# --- 메인 로직 ---
+if prompt := st.chat_input("내용을 입력하세요..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    #암종 분류, 데이터 추출, 시나리오 분석
-    response_text, updated_session = run_cancer_agent(
-        prompt, 
-        st.session_state.agent_session, 
-        client
-    )
-    
-    #세션에 반영
-    st.session_state.agent_session = updated_session
-    st.session_state.collected_data = updated_session["collected_data"]
+    with st.chat_message("user"): st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        render_checklist()
+        response = ""
         
-        missing = [k for k, v in st.session_state.collected_data.items() if v is None]
+        # 0. 모드 전환 체크 (항상 우선)
+        if "폐암" in prompt:
+            st.session_state.current_cancer = "LUNG"
+            st.info("🫁 **폐암 정밀 분석 모드**로 전환합니다.")
+        elif "간암" in prompt:
+            st.session_state.current_cancer = "LIVER"
+            st.info("🍷 **간암 정밀 분석 모드**로 전환합니다.")
+
+        # =========================================================
+        # 🔥 1. 시뮬레이션 의도 파악 (데이터 저장 전에 수행!)
+        # =========================================================
+        sim_intent = detect_simulation_intent(prompt, client)
         
-        if st.session_state.step == "COLLECTING":
-            if missing:
-                response = response_text
+        if sim_intent.get("type") == "simulation":
+            # 1. 현재 상태 점수 계산 (기준점)
+            current_score = predict_cancer_risk(st.session_state.collected_data, st.session_state.current_cancer)
+            
+            # 2. 미래 점수 계산
+            future_score = predict_scenario(
+                st.session_state.collected_data, 
+                sim_intent.get("changes"), 
+                st.session_state.current_cancer
+            )
+            
+            # 3. 차이 계산 및 문장 생성 (원하시던 포맷!)
+            diff = future_score - current_score
+            diff_text = "증가" if diff > 0 else "감소"
+            changes_str = ", ".join([f"{k}: {v}" for k, v in sim_intent.get('changes').items()])
+            
+            response = f"""
+            📊 **시뮬레이션 결과 ({st.session_state.current_cancer})**
+            
+            가정(**{changes_str}**)을 적용하면:
+            
+            - 현재 위험도: **{current_score}%**
+            - 예상 위험도: **{future_score}%**
+            
+            👉 결과적으로 암 발병 확률이 **{abs(diff):.1f}% 포인트 {diff_text}**합니다.
+            """
+
+        else:
+            # =====================================================
+            # 🔥 2. 시뮬레이션이 아닐 때만 정보를 저장 (오염 방지)
+            # =====================================================
+            new_data = gpt_extraction(st.session_state.messages, prompt, client)
+            if new_data:
+                for key, value in new_data.items():
+                    if value is not None and value != "":
+                        st.session_state.collected_data[key] = value
+                
+                # BMI 자동 계산
+                if 'Height' in st.session_state.collected_data and 'Weight' in st.session_state.collected_data:
+                    h = st.session_state.collected_data['Height']
+                    w = st.session_state.collected_data['Weight']
+                    st.session_state.collected_data['BMI'] = round(w / ((h/100)**2), 1)
+
+            # 3. 필수 정보 체크
+            missing_q = get_missing_info_question(st.session_state.collected_data, st.session_state.current_cancer)
+            
+            if missing_q:
+                response = missing_q
             else:
-                #시나리오 분석
-                scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
-                if any(word in prompt for word in scenario_keywords):
-                    response = response_text # 에이전트가 생성한 비교 분석 텍스트 사용
-                else:
-                    st.write("🔄 모든 정보가 수집되었습니다. 분석 중입니다...")
-                    c_type = st.session_state.agent_session["cancer_type"]
-                    #해당 암종 모델에 필요한 피처만 추출
-                    input_df = pd.DataFrame([st.session_state.collected_data])[FEATURE_CONFIG[c_type]]
-                    prob = MODELS[c_type].predict_proba(input_df)[0][1]
-                    
-                    response = interpret_result_with_gpt(prob, client, c_type)
-                    response += "\n\n**추가적인 상담이나 '만약 ~한다면?' 시뮬레이션도 가능합니다. 궁금한 점이 있으신가요?**"
-                    st.session_state.step = "ASK_ADDITIONAL"
-        
-        elif st.session_state.step == "ASK_ADDITIONAL":
-            #추가 상담에서 시나리오 분석
-            scenario_keywords = ["만약", "한다면", "끊으면", "줄이면", "빼면", "하면", "경우"]
-            if any(word in prompt for word in scenario_keywords):
-                response = response_text
-            elif any(word in prompt for word in ["응", "네", "해줘", "좋아", "간암", "위암"]):
-                response = "알겠습니다. 정밀 진단을 위해 추가 정보를 확인하겠습니다."
-            else:
-                response = "상담을 종료합니다. 건강한 하루 되세요!"
-                st.session_state.step = "FINISHED"
+                # 4. 최종 결과 (모든 정보 수집 완료)
+                score = predict_cancer_risk(st.session_state.collected_data, st.session_state.current_cancer)
+                analysis = interpret_result_with_gpt(prob=score, cancer_type=st.session_state.current_cancer, client=client)
+                
+                response = f"### 📊 {st.session_state.current_cancer} 분석 결과\n\n"
+                response += f"**현재 예측 위험도: {score}%**\n\n"
+                response += analysis
+                response += "\n\n--- \n💡 **Tip:** *'담배 끊으면?'*, *'50살이 되면?'* 처럼 가정해서 물어보세요."
 
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
-        st.session_state.agent_session["history"].append({"role": "assistant", "content": response})
