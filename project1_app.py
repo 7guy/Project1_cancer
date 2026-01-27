@@ -3,7 +3,7 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from project_logic import (
+from project1_logic import (
     predict_cancer_risk, 
     get_missing_info_question,
     gpt_extraction,
@@ -111,7 +111,8 @@ if prompt := st.chat_input("내용을 입력하세요..."):
                 response = f"### 📊 {st.session_state.current_cancer} 분석 결과\n\n"
                 response += f"**현재 예측 위험도: {score}%**\n\n"
                 response += analysis
-                response += "\n\n--- \n💡 **Tip:** *'담배 끊으면?'* 처럼 가정해서 물어보세요."
+                response += "💡 **Tip:** 지금 상태에서 *'폐암 모드로 바꿔줘'* 혹은 *'간암 결과는 어때?'* 라고 물어보세요. "
+                response += "또한 *'담배를 끊으면?'* 처럼 시나리오를 가정해서 물어볼 수도 있습니다."
 
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})

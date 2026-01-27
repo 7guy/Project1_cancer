@@ -64,7 +64,9 @@ def normalize_input(raw_data, cancer_type):
             safe_cast(raw_data.get('Family_History'), float, 0),
             safe_cast(raw_data.get('PhysicalActivity'), float, 5)
         ]
-        return np.array([features])
+        # 🔥 이 부분을 추가해서 터미널(콘솔) 로그를 확인하세요!
+        print(f"DEBUG [{cancer_type}] Input Features: {features}")
+        return [features]
 
     # --- B. 간암 모델 (LIVER) ---
     elif cancer_type == "LIVER":
@@ -85,11 +87,12 @@ def normalize_input(raw_data, cancer_type):
             act_map.get(raw_data.get('PhysicalActivity_Level', 'Moderate'), 1),
             float(raw_data.get('Diabetes', 0))
         ]
-        return np.array([features])
+        return [features]
 
     # --- C. 폐암 모델 (LUNG) ---
     elif cancer_type == "LUNG":
         # 특징: 1-2(Gender), 1-8(Alcohol/Smoking) 척도 및 컬럼명 준수
+        
         input_df = pd.DataFrame([{
             'Age': age,
             'Gender': gender + 1,
@@ -119,11 +122,28 @@ def normalize_input(raw_data, cancer_type):
 # --- 3. 통합 예측 인터페이스 ---
 def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
     try:
-        # 1. 데이터를 정규화 (여기서 딕셔너리 혹은 리스트가 나옴)
+        # 1. 암종별 정확한 피처 순서 정의 (학습 시와 반드시 일치해야 함)
+        feature_configs = {
+            "TOTAL": [
+                "Age", "Gender", "BMI", "Smoking", "Alcohol", 
+                "Family_History", "PhysicalActivity"
+            ],
+            "LIVER": [
+                "age", "gender", "bmi", "alcohol_consumption", "smoking_status", 
+                "hepatitis_b", "hepatitis_c", "cirrhosis_history", "family_history_cancer", 
+                "physical_activity_level", "diabetes"
+            ]
+        }
+
+        # 2. 현재 암종에 맞는 컬럼명 가져오기
+        cols = feature_configs.get(cancer_type)
         processed = normalize_input(raw_data, cancer_type)
         
-        # 2. [핵심] 모델이 인식할 수 있도록 DataFrame으로 변환
-        input_df = pd.DataFrame(processed) 
+        # 1. 반환값이 DataFrame이 아니면(리스트면) 변환
+        if not isinstance(processed, pd.DataFrame):
+            input_df = pd.DataFrame(processed, columns=cols)
+        else:
+            input_df = processed
         
         if cancer_type == "LIVER":
             model = res["LIVER"]["model"]
@@ -143,11 +163,6 @@ def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
             prob = model.predict_proba(input_df)[0][1]
             
         return round(float(prob) * 100, 1)
-        
-    except Exception as e:
-        print(f"❌ {cancer_type} 예측 중 오류 발생")
-        traceback.print_exc()
-        return 0.0
         
     except Exception as e:
         print(f"❌ {cancer_type} 예측 중 오류 발생")
@@ -176,7 +191,7 @@ def get_missing_info_question(collected_data, cancer_type):
             "Age", "Gender", "Smoking", "Passive_Smoker",
             "Air_Pollution", "Dust_Allergy", "Occupational_Hazards", 
             "Genetic_Risk", "Chronic_Disease", "Balanced_Diet", 
-            "Obesity_Score", "Chest_Pain", "Cough_Blood"
+            "Obesity_Score", "Chest_Pain"
         ]
     }
     
@@ -212,15 +227,14 @@ def get_missing_info_question(collected_data, cancer_type):
 
         # 폐암 상세
         "Passive_Smoker": "간접 흡연 노출 여부",
-        "Air_Pollution": "공기 오염 노출 정도(1~8)", 
+        "Air_Pollution": "공기 오염 노출 정도", 
         "Dust_Allergy": "먼지 알레르기 여부", 
         "Occupational_Hazards": "직업적 위험 요소 노출", 
         "Genetic_Risk": "폐암 유전적 위험도", 
         "Chronic_Disease": "만성 폐질환 여부", 
         "Balanced_Diet": "균형 잡힌 식단 여부", 
-        "Obesity_Score": "비만도 점수(1:마름 ~ 7:비만)", 
-        "Chest_Pain": "흉통(가슴 통증) 유무", 
-        "Cough_Blood": "객혈(피 섞인 기침) 유무"
+        "Obesity_Score": "비만도", 
+        "Chest_Pain": "흉통(가슴 통증) 유무"
     }
     
     # 질문 만들기
@@ -339,11 +353,11 @@ def gpt_extraction(messages, user_input, client):
     알 수 없는 정보는 null로 표시해.
     추출 대상: Age, Gender(남:0, 여:1), BMI, Smoking(안함:0, 함:1), Alcohol(0~5), Family_History(0,1), PhysicalActivity(0~10)
     추출 대상(간암): Alcohol_Status(Never, Occasional, Regular), Smoking_Status(Never, Former, Current), Hepatitis_B, Hepatitis_C, Cirrhosis, Diabetes, PhysicalActivity_Level(Low, Moderate, High)
-    추출 대상(폐암): Air_Pollution, Dust_Allergy, Occupational_Hazards, Genetic_Risk, Chronic_Disease, Balanced_Diet, Obesity_Score, Passive_Smoker, Chest_Pain, Cough_Blood
+    추출 대상(폐암): Air_Pollution(1~8), Dust_Allergy(1~8), Occupational_Hazards(1~8), Genetic_Risk(1~8), Chronic_Disease(1~8), Balanced_Diet(1~8), Obesity_Score(1~8), Passive_Smoker(1~8), Chest_Pain(1~8), Weight_Loss(1~8), Shortness_Breath(1~8), Dry_Cough(1~8)
     """
     
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input}
