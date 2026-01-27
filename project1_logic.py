@@ -156,9 +156,6 @@ def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
 
 # --- 4. 질문 생성 로직 (Missing Keys) ---
 def get_missing_info_question(collected_data, cancer_type):
-    """
-    어떤 정보가 더 필요한지 알려주는 함수
-    """
     # 모델별 필요 필드 정의
     required_fields = {
         "TOTAL": ["Age", "Gender", "BMI", "Smoking", "Alcohol"],
@@ -166,17 +163,31 @@ def get_missing_info_question(collected_data, cancer_type):
         "LUNG": ["Age", "Gender", "Smoking", "Occupational_Hazards", "Obesity_Score"]
     }
     
-    missing = [f for f in required_fields[cancer_type] if f not in collected_data]
+    # [수정] 단순히 키가 있는지만 보는 게 아니라, 실제 '값'이 유효한지 체크
+    missing = []
+    for f in required_fields[cancer_type]:
+        val = collected_data.get(f)
+        if val is None or val == "": # 값이 없거나 빈 문자열인 경우
+            missing.append(f)
     
     if not missing:
-        return None # 모든 정보 수집 완료
+        return None 
     
-    # 한국어 매핑 (예시)
-    label_map = {"Age": "나이", "Gender": "성별", "BMI": "체질량지수(BMI)", 
-                 "Alcohol_Status": "음주 습관", "Smoking_Status": "흡연 상태",
-                 "Occupational_Hazards": "직업적 위험 요소"}
+    # 한국어 매핑
+    label_map = {
+        "Age": "나이", "Gender": "성별", "BMI": "체질량지수(BMI)", "Smoking": "흡연 여부", "Alcohol": "음주 여부",
+        "Alcohol_Status": "음주 습관", "Smoking_Status": "흡연 상태", "Hepatitis_B": "B형 간염 여부",
+        "Occupational_Hazards": "직업적 위험 요소", "Obesity_Score": "비만도 점수"
+    }
     
-    return f"정확한 진단을 위해 {label_map.get(missing[0], missing[0])} 정보를 알려주세요."
+    # [수정] 누락된 모든 항목을 나열하여 질문
+    missing_labels = [label_map.get(m, m) for m in missing]
+    
+    if len(missing_labels) == 1:
+        return f"정확한 진단을 위해 **{missing_labels[0]}** 정보를 알려주세요."
+    else:
+        # 여러 개가 누락된 경우 나열
+        return f"정확한 진단을 위해 **{', '.join(missing_labels)}** 정보를 알려주시겠어요?"
 
 # --- [추가] 5. 사용자의 후속 질문 의도 판별 ---
 def classify_intent(user_input):
