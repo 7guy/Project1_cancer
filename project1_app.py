@@ -1,181 +1,270 @@
 import streamlit as st
-from openai import OpenAI
-from project1_logic import (
-    gpt_extraction,
-    generate_ask_question,
-    interpret_result_with_gpt,
-    model,
-    classify_user_input,
-    is_extraction_failed,
-    get_extraction_fail_reason,  
-    validate_extracted    
-)
-import pandas as pd
 import os
+from openai import OpenAI
 from dotenv import load_dotenv
 
+from project1_logic import (
+    predict_cancer_risk, 
+    get_missing_info_question,
+    gpt_extraction,
+    interpret_result_with_gpt,
+    predict_scenario,
+    detect_simulation_intent 
+)
+
+# ===============================
+# 환경 설정
+# ===============================
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-st.set_page_config(page_title="AI 암 발병 위험도 판단 챗봇", layout="wide")
-st.title("🩺 AI 암 발병 위험도 판단 서비스")
+st.set_page_config(page_title="AI Cancer Care", layout="wide")
+st.title("🩺 맞춤형 AI 암 위험도 정밀 분석")
 
-# --- 1. 세션 상태 초기화 ---
+# ===============================
+# 세션 상태
+# ===============================
 if 'messages' not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [
+        {"role": "assistant", "content": "안녕하세요! 통합 암 발병 위험도 분석을 위해 건강 정보를 알려주세요."}
+    ]
+
 if 'collected_data' not in st.session_state:
-    st.session_state.collected_data = {
-        k: None for k in [
-            "Age", "Gender", "BMI",
-            "Smoking", "Alcohol",
-            "Family_History", "PhysicalActivity"
-        ]
-    }
-if 'step' not in st.session_state:
-    st.session_state.step = "COLLECTING"
-if 'health_count' not in st.session_state:
-    st.session_state.health_count = 0
-if 'invalid_count' not in st.session_state:
-    st.session_state.invalid_count = 0
+    st.session_state.collected_data = {}
 
-# --- 2. 사이드바 (실시간 대시보드) ---
+if 'current_cancer' not in st.session_state:
+    st.session_state.current_cancer = "TOTAL"
+
+# 사이드바 즉시 반영용
+if 'data_updated' not in st.session_state:
+    st.session_state.data_updated = False
+
+
+# ===============================
+# 🔒 비데이터 입력 판별 (앞단 가드)
+# ===============================
+def is_non_data_input(text: str):
+    greetings = ["안녕", "하이", "hello", "반가워"]
+    vague_keywords = [
+        "피곤", "힘들", "기운", "컨디션", "무기력", "아파",
+        "요즘", "그냥", "모르겠", "스트레스"
+    ]
+    slang = [
+        "씨발", "시발", "ㅅㅂ", "존나", "병신", "개같", "좆", "fuck"
+    ]
+
+    t = text.lower()
+
+    if any(g in t for g in greetings):
+        return "greeting"
+    if any(s in t for s in slang):
+        return "slang"
+    if any(v in t for v in vague_keywords):
+        return "vague"
+
+    return None
+
+
+# ===============================
+# 사이드바
+# ===============================
 with st.sidebar:
-    st.subheader("📋 입력 정보 확인")
+    st.header("📊 데이터 현황")
+    st.write(f"**현재 타겟:** {st.session_state.current_cancer}")
+    st.divider()
 
-    checklist_area = st.empty()
-
-    def render_checklist():
-        check_items = {
-            "Age": "나이",
-            "Gender": "성별",
-            "BMI": "BMI(또는 키와 몸무게)",
-            "Smoking": "흡연 여부",
-            "Alcohol": "음주 빈도",
-            "Family_History": "가족력",
-            "PhysicalActivity": "운동량"
-        }
-
-        with checklist_area.container():
-            for key, label in check_items.items():
-                value = st.session_state.collected_data.get(key)
-                status = "⬜" if value is None else "✅"
-                st.write(f"{status} {label}")
-
-    render_checklist()
+    if st.session_state.collected_data:
+        for k, v in st.session_state.collected_data.items():
+            if v is not None and v != "":
+                st.write(f"✅ {k}: {v}")
 
     if st.button("🔄 상담 초기화"):
         st.session_state.clear()
         st.rerun()
 
-# --- 3. 대화 내용 출력 ---
+
+# ===============================
+# 채팅 화면
+# ===============================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 4. 사용자 입력 및 총괄 로직 (Orchestrator) ---
-if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
+
+# ===============================
+# 메인 로직
+# ===============================
+if prompt := st.chat_input("내용을 입력하세요..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        response = None
+    # ===============================
+    # 🚨 0. 비데이터 입력 최우선 처리
+    # ===============================
+    non_data_type = is_non_data_input(prompt)
 
-        input_type = classify_user_input(prompt)
+    if non_data_type:
+        question_text = get_missing_info_question(
+            st.session_state.collected_data,
+            st.session_state.current_cancer
+        )
 
-        if input_type == "ABUSE":
-            response = (
-                "많이 답답하신 것 같아요 😔\n\n"
-                "그래도 제가 도와드릴 수 있어요.\n"
-                "암 위험도 판단을 위해 아래 예시처럼 정보를 알려주세요.\n\n"
-                "👉 예: 키는 160이고 몸무게 58이야. 담배를 자주 피고 운동은 거의 안 해"
-            )
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.stop()
-
-        if input_type == "GREETING":
-            response = (
-                "안녕하세요 😊\n"
-                "암 발병 위험도를 참고용으로 안내해드리는 서비스예요.\n\n"
-                "나이, 성별, 흡연 여부처럼 편한 정보부터 알려주시면 시작할게요!"
-            )
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.stop()
-
-        extracted = gpt_extraction(st.session_state.messages, prompt, client)
-        extracted = validate_extracted(extracted)
-
-        if is_extraction_failed(extracted):
-            st.session_state.invalid_count += 1
-
-            reason = get_extraction_fail_reason(extracted, input_type)
-
-            if reason == "NO_RELEVANT_INFO":
-                response = "현재 입력만으로는 분석이 어려워요 😅 기본 정보를 알려주세요."
-            elif reason == "SYMPTOM_ONLY":
-                response = "증상은 참고했어요 🙂 나이처럼 기본 정보도 우선 알려주시면 좋아요."
-            elif reason == "GPT_ERROR":
-                response = "일시적인 오류가 발생했어요. 다시 한 번 입력해 주세요."
-            else:
-                if st.session_state.invalid_count == 1:
-                    response = "분석을 위해 기본 정보가 필요해요 🙂"
-                elif st.session_state.invalid_count == 2:
-                    response = "아래 예시처럼 입력해주시면 좋아요 👇\n\n👉 예: 25살 여자, 비흡연"
-                else:
-                    response = (
-                        "입력 예시를 하나 선택해주세요 👇\n"
-                        "1️⃣ 키(cm)와 몸무게(kg) 또는 BMI\n"
-                        "2️⃣ 흡연 여부 (예: 비흡연 / 흡연)\n"
-                        "3️⃣ 음주 빈도 (예: 거의 안 함 / 주 1~2회)\n"
-                        "4️⃣ 가족력 (예: 없음 / 있음)\n"
-                        "5️⃣ 운동량 (예: 거의 안 함 / 주 3회 이상)\n\n"
-                        "👉 예: 키는 160이고 몸무게는 58이야. 담배를 자주 피고 운동을 거의 안 해"
-                    )
-
-            st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.stop()
-
-        for k, v in extracted.items():
-            if v is not None:
-                st.session_state.collected_data[k] = v
-
-        render_checklist()
-
-        missing = [
-            k for k, v in st.session_state.collected_data.items()
-            if v is None
-        ]
-
-        if st.session_state.step == "COLLECTING":
-            if missing:
-                response = generate_ask_question(
-                    st.session_state.collected_data, missing
+        # --- 비속어 ---
+        if non_data_type == "slang":
+            if not st.session_state.collected_data:
+                response = (
+                    "많이 답답하셨나 봐요. 괜찮아요 🙂\n\n"
+                    "말씀해주신 내용은 이해했어요.\n"
+                    "우선 아래 기본 정보부터 하나씩 알려주시면 도와드릴게요.\n\n"
+                    f"{question_text}"
                 )
             else:
-                st.write("🔄 모든 정보가 수집되었습니다. 분석 중입니다...")
+                response = (
+                    "지금 상태가 많이 힘들어 보이네요.\n\n"
+                    "지금은 암 위험도 판단을 위해 아래 항목 중 선택해서 알려주세요 👇\n\n"
+                    "1️⃣ 키(cm)와 몸무게(kg) 또는 BMI\n"
+                    "2️⃣ 흡연 여부 (예: 비흡연 / 흡연)\n"
+                    "3️⃣ 음주 빈도 (예: 거의 안 함 / 주 1~2회)\n"
+                    "4️⃣ 가족력 (예: 없음 / 있음)\n"
+                    "5️⃣ 운동량 (예: 거의 안 함 / 주 3회 이상)\n\n"
+                    "👉 예: 키는 160이고 몸무게는 58이야. 담배를 자주 피고 운동을 거의 안 해"
+                )
 
-                data = st.session_state.collected_data
-                input_df = pd.DataFrame([{
-                    "Age": data["Age"],
-                    "Gender": data["Gender"],
-                    "BMI": data["BMI"],
-                    "Smoking": data["Smoking"],
-                    "Alcohol": data["Alcohol"],
-                    "Family_History": 1 if data["Family_History"] > 0 else 0,
-                    "PhysicalActivity": data["PhysicalActivity"]
-                }])
+        # --- 막연한 증세 ---
+        elif non_data_type == "vague":
+            if not st.session_state.collected_data:
+                response = (
+                    "말씀해주신 증상은 참고할게요 🙂\n\n"
+                    "우선 아래 기본 정보부터 마저 알려주세요.\n\n"
+                    f"{question_text}"
+                )
+            else:
+                response = (
+                    "말씀해주신 증상은 충분히 이해했어요 🙂\n\n"
+                    "지금은 암 위험도 판단을 위해 아래 항목 중 선택해서 알려주세요 👇\n\n"
+                    "1️⃣ 키(cm)와 몸무게(kg) 또는 BMI\n"
+                    "2️⃣ 흡연 여부 (예: 비흡연 / 흡연)\n"
+                    "3️⃣ 음주 빈도 (예: 거의 안 함 / 주 1~2회)\n"
+                    "4️⃣ 가족력 (예: 없음 / 있음)\n"
+                    "5️⃣ 운동량 (예: 거의 안 함 / 주 3회 이상)\n\n"
+                    "👉 예: 키는 160이고 몸무게는 58이야. 담배를 자주 피고 운동을 거의 안 해"
+                )
 
-                prob = model.predict_proba(input_df)[0][1]
-                response = interpret_result_with_gpt(prob, client)
-                response += ("\n\n추가적인 상담이 필요하시다면 "
-                            "간암이나 폐암 위험도 판단도 가능합니다. 계속 진행할까요?")
-                st.session_state.step = "ASK_ADDITIONAL"
+        # --- 인사 ---
+        elif non_data_type == "greeting":
+            response = "안녕하세요 🙂 건강 정보나 증상을 편하게 말씀해주세요."
 
-        if response is not None:
+        with st.chat_message("assistant"):
             st.markdown(response)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": response}
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
+
+        st.stop()  # 🔒 아래 기존 로직 절대 실행 안 됨
+
+
+    # ===============================
+    # ⬇⬇⬇ 기존 로직 (절대 수정 없음)
+    # ===============================
+    with st.chat_message("assistant"):
+        response = ""
+
+        # 1. 시뮬레이션 의도 파악
+        sim_intent = detect_simulation_intent(prompt, client)
+
+        # 2. 암종 전환
+        new_cancer_type = None
+        if "폐암" in prompt:
+            new_cancer_type = "LUNG"
+        elif "간암" in prompt:
+            new_cancer_type = "LIVER"
+
+        if new_cancer_type and new_cancer_type != st.session_state.current_cancer:
+            st.session_state.current_cancer = new_cancer_type
+            st.info(f"🔄 **{new_cancer_type} 정밀 분석 모드**로 전환합니다.")
+
+        # 3. 시뮬레이션
+        if sim_intent.get("type") == "simulation":
+            current_score = predict_cancer_risk(
+                st.session_state.collected_data,
+                st.session_state.current_cancer
             )
+
+            future_score = predict_scenario(
+                st.session_state.collected_data,
+                sim_intent.get("changes"),
+                st.session_state.current_cancer
+            )
+
+            diff = future_score - current_score
+            diff_text = "증가" if diff > 0 else "감소"
+
+            changes_str = ", ".join(
+                [f"{k}: {v}" for k, v in sim_intent.get("changes", {}).items()]
+            )
+
+            response = f"""
+📊 **시뮬레이션 결과 ({st.session_state.current_cancer})**
+
+가정(**{changes_str}**)을 적용하면:
+
+- 현재 위험도: **{current_score}%**
+- 예상 위험도: **{future_score}%**
+
+👉 결과적으로 암 발병 확률이 **{abs(diff):.1f}%p {diff_text}**합니다.
+"""
+
+        # 4. 일반 정보 수집
+        else:
+            new_data = gpt_extraction(
+                st.session_state.messages,
+                prompt,
+                client
+            )
+
+            if new_data:
+                updated = False
+                for key, value in new_data.items():
+                    if value is not None and value != "":
+                        st.session_state.collected_data[key] = value
+                        updated = True
+                if updated:
+                    st.session_state.data_updated = True
+
+            missing_q = get_missing_info_question(
+                st.session_state.collected_data,
+                st.session_state.current_cancer
+            )
+
+            if missing_q:
+                response = missing_q
+            else:
+                score = predict_cancer_risk(
+                    st.session_state.collected_data,
+                    st.session_state.current_cancer
+                )
+
+                analysis = interpret_result_with_gpt(
+                    prob=score,
+                    cancer_type=st.session_state.current_cancer,
+                    client=client
+                )
+
+                response = f"### 📊 {st.session_state.current_cancer} 분석 결과\n\n"
+                response += f"**현재 예측 위험도: {score}%**\n\n"
+                response += analysis
+
+        st.markdown(response)
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
+
+
+# ===============================
+# 사이드바 즉시 반영
+# ===============================
+if st.session_state.data_updated:
+    st.session_state.data_updated = False
+    st.rerun()
