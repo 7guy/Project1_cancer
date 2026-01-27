@@ -1,107 +1,125 @@
 import streamlit as st
-from openai import OpenAI
-from project1_logic import gpt_extraction, generate_ask_question, interpret_result_with_gpt, model
-import pandas as pd
 import os
+import traceback
+from openai import OpenAI
 from dotenv import load_dotenv
+
+# 질문자님의 logic.py 함수들 임포트
+from project1_logic import (
+    predict_cancer_risk, 
+    get_missing_info_question,
+    gpt_extraction,          # 보완한 GPT 추출 함수
+    interpret_result_with_gpt, # gpt-4o로 업그레이드한 해석 함수
+    predict_scenario
+)
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-st.set_page_config(page_title="AI 암 진단 챗봇", layout="wide")
-st.title("🩺 AI 암 발병 위험도 진단 서비스")
+st.set_page_config(page_title="AI Cancer Care", layout="wide")
+st.title("🩺 맞춤형 AI 암 위험도 정밀 분석")
 
-# --- 1. 세션 상태 초기화 ---
+# --- 1. 세션 상태 관리 (흐름 제어 핵심) ---
 if 'messages' not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 건강 정보를 입력하시면 먼저 통합 암 발병 위험도를 분석해 드립니다."}]
 if 'collected_data' not in st.session_state:
-    st.session_state.collected_data = {k: None for k in ["Age", "Gender", "BMI", "Smoking", "Alcohol", "Family_History", "PhysicalActivity"]}
+    st.session_state.collected_data = {}
 if 'step' not in st.session_state:
-    st.session_state.step = "COLLECTING"
+    st.session_state.step = "TOTAL_COLLECT"  # 진행 단계
+if 'cancer_type' not in st.session_state:
+    st.session_state.cancer_type = "TOTAL"
 
-# --- 2. 사이드바 (실시간 대시보드) ---
+# --- 2. 사이드바 (정보 대시보드 - 유지) ---
 with st.sidebar:
-    st.subheader("📋 입력 정보 확인")
-
-    checklist_area = st.empty()
-
-    def render_checklist():
-        check_items = {
-            "Age": "나이",
-            "Gender": "성별",
-            "BMI": "BMI(또는 키와 몸무게)",
-            "Smoking": "흡연 여부",
-            "Alcohol": "음주 빈도",
-            "Family History": "가족력",
-            "Physical Activity": "운동량"
-        }
-
-        with checklist_area.container():
-            for label, key in check_items.items():
-                value = st.session_state.collected_data.get(key)
-                status = "⬜" if value is None else "✅"
-                st.write(f"{status} {label}")
-
-    render_checklist()
-
+    st.header("📊 현재 데이터 수집 현황")
+    st.caption(f"현재 분석 단계: {st.session_state.step}")
+    st.divider()
+    
+    if not st.session_state.collected_data:
+        st.info("입력된 정보가 없습니다.")
+    else:
+        # 입력된 정보들을 보기 좋게 나열
+        for k, v in st.session_state.collected_data.items():
+            if v is not None:
+                st.write(f"**{k}**: {v}")
+    
+    st.divider()
     if st.button("🔄 상담 초기화"):
         st.session_state.clear()
         st.rerun()
 
-# --- 3. 대화 내용 출력 ---
+# --- 3. 대화창 렌더링 ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 4. 사용자 입력 및 총괄 로직 (Orchestrator) ---
-if prompt := st.chat_input("증상이나 건강 정보를 입력하세요..."):
-    # 유저 메시지 저장 및 출력
+# --- [중요] 세션 상태에 '현재 선택된 암' 저장 변수 추가 ---
+if 'current_cancer' not in st.session_state:
+    st.session_state.current_cancer = "TOTAL"
+if 'finished_cancers' not in st.session_state:
+    st.session_state.finished_cancers = [] # 이미 분석 완료된 암 목록
+
+# --- 메인 대화 로직 ---
+if prompt := st.chat_input("원하시는 단계를 입력하세요 (예: 폐암 분석, 금연하면?, 종료)"):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    with st.chat_message("user"): st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # A. 정보 추출
-        extracted = gpt_extraction(st.session_state.messages, prompt, client)
-        if extracted:
-            for k, v in extracted.items():
-                if v is not None: st.session_state.collected_data[k] = v
+        # 1. 의도 파악 (질문자님의 classify_intent 또는 키워드 매칭)
+        # 1-A. 시나리오 질문 (금연한다면 등)
+        if any(word in prompt for word in ["한다면", "하면", "끊으면", "줄이면"]):
+            # 시뮬레이션 로직 수행
+            # (가정: Smoking을 0으로 시뮬레이션)
+            sim_score = predict_scenario(st.session_state.collected_data, "Smoking", 0, st.session_state.current_cancer)
+            response = f"💡 만약 금연하신다면, 현재 분석 중인 **{st.session_state.current_cancer}** 위험도가 **{sim_score}%**로 변화할 것으로 예측됩니다."
+            response += "\n\n다른 가정을 해보시겠어요, 아니면 다른 암 정밀 분석을 해보시겠어요?"
+
+        # 1-B. 다른 암 분석 선택 (간암/폐암)
+        elif any(word in prompt for word in ["간암", "폐암", "정밀"]):
+            target = "LIVER" if "간" in prompt else "LUNG"
+            st.session_state.current_cancer = target
             
-            # rerun 없이 체크 즉시 갱신
-            render_checklist()
-        
-        # B. 상태별 분기 로직 (Orchestrator)
-        missing = [k for k, v in st.session_state.collected_data.items() if v is None]
-        
-        if st.session_state.step == "COLLECTING":
-            if missing:
-                # 정보가 부족하면 자연스러운 질문 생성
-                response = generate_ask_question(st.session_state.collected_data, missing)
+            # 정보 추출 및 추가 질문 확인
+            new_data = gpt_extraction(st.session_state.messages, prompt, client)
+            st.session_state.collected_data.update(new_data)
+            
+            missing_q = get_missing_info_question(st.session_state.collected_data, target)
+            if missing_q:
+                response = f"### 🧪 {target} 정밀 분석을 위해 추가 정보가 필요합니다.\n\n{missing_q}"
             else:
-                # 모든 정보 수집 완료 -> 모델 호출
-                st.write("🔄 모든 정보가 수집되었습니다. 분석 중입니다...")
-                data = st.session_state.collected_data
-                input_df = pd.DataFrame([{
-                    'Age': data['Age'], 'Gender': data['Gender'], 'BMI': data['BMI'],
-                    'Smoking': data['Smoking'], 'Alcohol': data['Alcohol'],
-                    'Family_History': 1 if data['Family_History'] > 0 else 0,
-                    'PhysicalActivity': data['PhysicalActivity']
-                }])
-                prob = model.predict_proba(input_df)[0][1]
+                score = predict_cancer_risk(st.session_state.collected_data, target)
+                analysis = interpret_result_with_gpt(prob=score, cancer_type=target, client=client)
+                response = f"### 🏁 {target} 정밀 분석 결과\n\n{analysis}\n\n**위험도: {score}%**"
+                if target not in st.session_state.finished_cancers:
+                    st.session_state.finished_cancers.append(target)
                 
-                # 결과 해석 (GPT)
-                response = interpret_result_with_gpt(prob, client)
-                response += "\n\n**추가적인 상담이 필요하시다면 간암이나 위암 정밀 진단도 가능합니다. 계속할까요?**"
-                st.session_state.step = "ASK_ADDITIONAL"
-        
-        elif st.session_state.step == "ASK_ADDITIONAL":
-            # 의도 파악 로직 (간단히 구현)
-            if any(word in prompt for word in ["응", "네", "해줘", "좋아", "간암", "위암"]):
-                response = "알겠습니다. 정밀 진단을 위해 추가 정보를 확인하겠습니다. (로직 확장 가능)"
-                # 여기서 step을 LIVER 등으로 전환 가능
+                # 다음 선택지 제공
+                remaining = [c for c in ["LIVER", "LUNG"] if c not in st.session_state.finished_cancers]
+                response += f"\n\n---\n이제 어떤 것을 도와드릴까요?\n"
+                if remaining: response += f"- **{remaining[0]}** 정밀 분석\n"
+                response += f"- 현재 결과에서 **시뮬레이션** (예: 술을 끊는다면?)\n- 상담 **종료**"
+
+        # 1-C. 종료
+        elif "종료" in prompt or "끝" in prompt:
+            response = "모든 상담이 완료되었습니다. 건강한 하루 되시길 바랍니다! 분석 결과 요약이 필요하시면 말씀해 주세요."
+
+        # 1-D. 그 외 (데이터 수집 중인 경우)
+        else:
+            new_data = gpt_extraction(st.session_state.messages, prompt, client)
+            st.session_state.collected_data.update(new_data)
+            
+            # 현재 분석 중인 암 종류에 맞춰 질문
+            missing_q = get_missing_info_question(st.session_state.collected_data, st.session_state.current_cancer)
+            if missing_q:
+                response = missing_q
             else:
-                response = "상담을 종료합니다. 건강한 하루 되세요!"
-                st.session_state.step = "FINISHED"
+                # 데이터가 다 모이면 즉시 분석 결과 출력
+                score = predict_cancer_risk(st.session_state.collected_data, st.session_state.current_cancer)
+                analysis = interpret_result_with_gpt(prob=score, cancer_type=st.session_state.current_cancer, client=client)
+                response = f"### 📊 {st.session_state.current_cancer} 분석 결과\n\n{analysis}\n\n**위험도: {score}%**"
+                
+                # 분석 완료 후 메뉴 제안
+                response += "\n\n---\n**[다음 선택지]**\n1. 다른 암(간암/폐암) 정밀 분석\n2. 건강 수치 시뮬레이션 (예: 담배를 끊는다면?)\n3. 상담 종료"
 
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
