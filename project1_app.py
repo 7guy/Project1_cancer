@@ -174,7 +174,7 @@ if prompt := st.chat_input("내용을 입력하세요..."):
             {"role": "assistant", "content": response}
         )
 
-        st.stop()  # 🔒 아래 기존 로직 절대 실행 안 됨
+        st.stop() 
 
 
     # ===============================
@@ -196,6 +196,7 @@ if prompt := st.chat_input("내용을 입력하세요..."):
         if new_cancer_type and new_cancer_type != st.session_state.current_cancer:
             st.session_state.current_cancer = new_cancer_type
             st.info(f"🔄 **{new_cancer_type} 정밀 분석 모드**로 전환합니다.")
+            st.rerun()
 
         # 3. 시뮬레이션
         if sim_intent.get("type") == "simulation":
