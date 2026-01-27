@@ -13,6 +13,15 @@ from project1_logic import (
 )
 
 # ===============================
+# 모델 표시용 (UI 전용, 로직 무관)
+# ===============================
+model_label_map = {
+    "TOTAL": "암 위험도 모델",
+    "LUNG": "폐암 위험도 모델",
+    "LIVER": "간암 위험도 모델"
+}
+
+# ===============================
 # 환경 설정
 # ===============================
 load_dotenv()
@@ -71,6 +80,9 @@ def is_non_data_input(text: str):
 with st.sidebar:
     st.header("📊 데이터 현황")
     st.write(f"**현재 타겟:** {st.session_state.current_cancer}")
+    st.write(
+        f"🧠 **현재 모델:** {model_label_map.get(st.session_state.current_cancer)}"
+    )
     st.divider()
 
     if st.session_state.collected_data:
@@ -255,6 +267,8 @@ if prompt := st.chat_input("내용을 입력하세요..."):
                 response = f"### 📊 {st.session_state.current_cancer} 분석 결과\n\n"
                 response += f"**현재 예측 위험도: {score}%**\n\n"
                 response += analysis
+                response += "\n\n💡 **Tip:** 지금 상태에서 *'폐암 모드로 바꿔줘'* 혹은 *'간암 결과는 어때?'* 라고 물어보세요. "
+                response += "또한 *'담배를 끊으면?'* 처럼 시나리오를 가정해서 물어볼 수도 있습니다."
 
         st.markdown(response)
         st.session_state.messages.append(
