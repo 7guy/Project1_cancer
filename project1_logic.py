@@ -188,11 +188,13 @@ def get_missing_info_question(collected_data, cancer_type):
         
         # 폐암 (프롬프트에 적힌 상세 항목 추가)
         "LUNG": [
-            "Age", "Gender", "Smoking", "Passive_Smoker",
-            "Air_Pollution", "Dust_Allergy", "Occupational_Hazards", 
-            "Genetic_Risk", "Chronic_Disease", "Balanced_Diet", 
-            "Obesity_Score", "Chest_Pain"
+            "Chronic_Disease",
+            "Chest_Pain",
+            "Weight_Loss",
+            "Shortness_Breath",
+            "Dry_Cough"
         ]
+
     }
     
     # 2. 누락된 항목 찾기
@@ -226,15 +228,12 @@ def get_missing_info_question(collected_data, cancer_type):
         "PhysicalActivity_Level": "활동 강도(상/중/하)",
 
         # 폐암 상세
-        "Passive_Smoker": "간접 흡연 노출 여부",
-        "Air_Pollution": "공기 오염 노출 정도", 
-        "Dust_Allergy": "먼지 알레르기 여부", 
-        "Occupational_Hazards": "직업적 위험 요소 노출", 
-        "Genetic_Risk": "폐암 유전적 위험도", 
-        "Chronic_Disease": "만성 폐질환 여부", 
-        "Balanced_Diet": "균형 잡힌 식단 여부", 
-        "Obesity_Score": "비만도", 
-        "Chest_Pain": "흉통(가슴 통증) 유무"
+        "Chronic_Disease": "만성 폐질환 여부",
+        "Chest_Pain": "흉통(가슴 통증)",
+        "Weight_Loss": "체중 감소",
+        "Shortness_Breath": "호흡 곤란",
+        "Dry_Cough": "마른 기침"
+
     }
     
     # 질문 만들기
