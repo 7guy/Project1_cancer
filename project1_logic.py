@@ -64,7 +64,9 @@ def normalize_input(raw_data, cancer_type):
             safe_cast(raw_data.get('Family_History'), float, 0),
             safe_cast(raw_data.get('PhysicalActivity'), float, 5)
         ]
-        return np.array([features])
+        # 🔥 이 부분을 추가해서 터미널(콘솔) 로그를 확인하세요!
+        print(f"DEBUG [{cancer_type}] Input Features: {features}")
+        return [features]
 
     # --- B. 간암 모델 (LIVER) ---
     elif cancer_type == "LIVER":
@@ -85,11 +87,12 @@ def normalize_input(raw_data, cancer_type):
             act_map.get(raw_data.get('PhysicalActivity_Level', 'Moderate'), 1),
             float(raw_data.get('Diabetes', 0))
         ]
-        return np.array([features])
+        return [features]
 
     # --- C. 폐암 모델 (LUNG) ---
     elif cancer_type == "LUNG":
         # 특징: 1-2(Gender), 1-8(Alcohol/Smoking) 척도 및 컬럼명 준수
+        
         input_df = pd.DataFrame([{
             'Age': age,
             'Gender': gender + 1,
@@ -119,11 +122,28 @@ def normalize_input(raw_data, cancer_type):
 # --- 3. 통합 예측 인터페이스 ---
 def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
     try:
-        # 1. 데이터를 정규화 (여기서 딕셔너리 혹은 리스트가 나옴)
+        # 1. 암종별 정확한 피처 순서 정의 (학습 시와 반드시 일치해야 함)
+        feature_configs = {
+            "TOTAL": [
+                "Age", "Gender", "BMI", "Smoking", "Alcohol", 
+                "Family_History", "PhysicalActivity"
+            ],
+            "LIVER": [
+                "age", "gender", "bmi", "alcohol_consumption", "smoking_status", 
+                "hepatitis_b", "hepatitis_c", "cirrhosis_history", "family_history_cancer", 
+                "physical_activity_level", "diabetes"
+            ]
+        }
+
+        # 2. 현재 암종에 맞는 컬럼명 가져오기
+        cols = feature_configs.get(cancer_type)
         processed = normalize_input(raw_data, cancer_type)
         
-        # 2. [핵심] 모델이 인식할 수 있도록 DataFrame으로 변환
-        input_df = pd.DataFrame(processed) 
+        # 1. 반환값이 DataFrame이 아니면(리스트면) 변환
+        if not isinstance(processed, pd.DataFrame):
+            input_df = pd.DataFrame(processed, columns=cols)
+        else:
+            input_df = processed
         
         if cancer_type == "LIVER":
             model = res["LIVER"]["model"]
@@ -148,78 +168,113 @@ def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
         print(f"❌ {cancer_type} 예측 중 오류 발생")
         traceback.print_exc()
         return 0.0
-        
-    except Exception as e:
-        print(f"❌ {cancer_type} 예측 중 오류 발생")
-        traceback.print_exc()
-        return 0.0
 
 # --- 4. 질문 생성 로직 (Missing Keys) ---
 def get_missing_info_question(collected_data, cancer_type):
-    # 모델별 필요 필드 정의
+    # 1. [핵심 수정] 검문해야 할 리스트를 프롬프트 내용과 똑같이 맞춰줍니다.
     required_fields = {
-        "TOTAL": ["Age", "Gender", "BMI", "Smoking", "Alcohol"],
-        "LIVER": ["Age", "Gender", "BMI", "Alcohol_Status", "Smoking_Status", "Hepatitis_B"],
-        "LUNG": ["Age", "Gender", "Smoking", "Occupational_Hazards", "Obesity_Score"]
+        # 일반암 (기초 7종)
+        "TOTAL": [
+            "Age", "Gender", "BMI", "Smoking", "Alcohol", 
+            "Family_History", "PhysicalActivity"
+        ],
+        
+        # 간암 (프롬프트에 적힌 상세 항목 추가)
+        "LIVER": [
+            "Age", "Gender", "BMI", "Alcohol_Status", "Smoking_Status", 
+            "Hepatitis_B", "Hepatitis_C", "Cirrhosis", "Diabetes", 
+            "PhysicalActivity_Level"
+        ],
+        
+        # 폐암 (프롬프트에 적힌 상세 항목 추가)
+        "LUNG": [
+            "Age", "Gender", "Smoking", "Passive_Smoker",
+            "Air_Pollution", "Dust_Allergy", "Occupational_Hazards", 
+            "Genetic_Risk", "Chronic_Disease", "Balanced_Diet", 
+            "Obesity_Score", "Chest_Pain"
+        ]
     }
     
-    # [수정] 단순히 키가 있는지만 보는 게 아니라, 실제 '값'이 유효한지 체크
+    # 2. 누락된 항목 찾기
     missing = []
-    for f in required_fields[cancer_type]:
+    # 해당 암종(cancer_type)에 필요한 필드 리스트를 가져와서 검사
+    target_fields = required_fields.get(cancer_type, required_fields["TOTAL"])
+    
+    for f in target_fields:
         val = collected_data.get(f)
-        if val is None or val == "": # 값이 없거나 빈 문자열인 경우
+        if val is None or val == "": 
             missing.append(f)
     
+    # 누락된 게 없으면 통과(None 반환)
     if not missing:
         return None 
     
-    # 한국어 매핑
+    # 3. [핵심 수정] 사용자에게 보여줄 친절한 한국어 이름표
     label_map = {
-        "Age": "나이", "Gender": "성별", "BMI": "체질량지수(BMI)", "Smoking": "흡연 여부", "Alcohol": "음주 여부",
-        "Alcohol_Status": "음주 습관", "Smoking_Status": "흡연 상태", "Hepatitis_B": "B형 간염 여부",
-        "Occupational_Hazards": "직업적 위험 요소", "Obesity_Score": "비만도 점수"
+        # 공통
+        "Age": "나이", "Gender": "성별", "BMI": "키와 몸무게(또는 BMI)", 
+        "Smoking": "흡연 여부", "Alcohol": "음주 빈도",
+        "Family_History": "가족력", "PhysicalActivity": "운동량",
+        
+        # 간암 상세
+        "Alcohol_Status": "음주 습관(가끔/자주/안함)", 
+        "Smoking_Status": "흡연 이력(과거/현재/안함)", 
+        "Hepatitis_B": "B형 간염 여부", 
+        "Hepatitis_C": "C형 간염 여부", 
+        "Cirrhosis": "간경변증 여부", 
+        "Diabetes": "당뇨병 여부", 
+        "PhysicalActivity_Level": "활동 강도(상/중/하)",
+
+        # 폐암 상세
+        "Passive_Smoker": "간접 흡연 노출 여부",
+        "Air_Pollution": "공기 오염 노출 정도", 
+        "Dust_Allergy": "먼지 알레르기 여부", 
+        "Occupational_Hazards": "직업적 위험 요소 노출", 
+        "Genetic_Risk": "폐암 유전적 위험도", 
+        "Chronic_Disease": "만성 폐질환 여부", 
+        "Balanced_Diet": "균형 잡힌 식단 여부", 
+        "Obesity_Score": "비만도", 
+        "Chest_Pain": "흉통(가슴 통증) 유무"
     }
     
-    # [수정] 누락된 모든 항목을 나열하여 질문
+    # 질문 만들기
     missing_labels = [label_map.get(m, m) for m in missing]
     
+    # 너무 많이 물어보면 당황하니까 개수에 따라 말투 다르게
     if len(missing_labels) == 1:
-        return f"정확한 진단을 위해 **{missing_labels[0]}** 정보를 알려주세요."
+        return f"정확한 {cancer_type} 분석을 위해 **{missing_labels[0]}** 정보를 알려주세요."
     else:
-        # 여러 개가 누락된 경우 나열
-        return f"정확한 진단을 위해 **{', '.join(missing_labels)}** 정보를 알려주시겠어요?"
-
-# --- [추가] 5. 사용자의 후속 질문 의도 판별 ---
-def classify_intent(user_input):
-    """
-    사용자의 추가 질문이 '가정(What-if)'인지 '타 암종 상세분석'인지 판별
-    (이 기능은 GPT 프롬프트에 포함시켜 JSON으로 받는 것이 가장 정확하지만, 
-    로직상 분류 기준을 세워둡니다.)
-    """
-    # 실제 구현은 app.py 내의 gpt_extraction 시 시스템 프롬프트에 
-    # 'intent': 'what_if' | 'detail_request' | 'general' 을 추가하도록 설정합니다.
-    pass
+        # 3개 이상이면 줄바꿈으로 깔끔하게
+        if len(missing_labels) > 3:
+            list_str = "\n".join([f"- {item}" for item in missing_labels])
+            return f"정밀한 분석을 위해 다음 정보들이 더 필요해요! 🧐\n\n{list_str}"
+        else:
+            return f"정확한 분석을 위해 **{', '.join(missing_labels)}** 정보를 알려주시겠어요?"
 
 # --- [추가] 6. '만약에' 시나리오 재계산 로직 ---
-def predict_scenario(current_data, change_key, change_value, cancer_type):
+def predict_scenario(current_data, changes, cancer_type):
     """
-    "담배를 끊는다면?" 처럼 특정 조건을 바꿨을 때의 위험도를 시뮬레이션
+    detect_simulation_intent에서 추출한 changes 딕셔너리를 
+    기존 데이터에 통째로 업데이트하여 시뮬레이션 결과를 반환합니다.
     """
-    # 1. 기존 데이터 복사
+    # 1. 원본 데이터 복사 (원본 유지, 시뮬레이션용 복제본 생성)
     scenario_data = current_data.copy()
     
-    # 2. 특정 필드 값 변경
-    # 예: "담배를 끊는다면?" -> Smoking=0, Smoking_Status='Never'
-    if change_key == "Smoking":
-        scenario_data["Smoking"] = 0
-        scenario_data["Smoking_Status"] = "Never"
-    elif change_key == "Alcohol":
-        scenario_data["Alcohol"] = 0
-        scenario_data["Alcohol_Status"] = "Never"
-        scenario_data["Alcohol_Score"] = 0
+    # 2. GPT가 추출한 변경사항들을 한 번에 반영
+    if changes:
+        scenario_data.update(changes)
         
-    # 3. 변경된 데이터로 다시 예측
+        # [중요] 연관 변수 보정 (예: Smoking이 바뀌면 Smoking_Status도 변경)
+        if "Smoking" in changes:
+            scenario_data["Smoking_Status"] = "Never" if changes["Smoking"] == 0 else "Current"
+        if "Alcohol" in changes:
+            # 음주 빈도(0~5)에 따른 상태 매핑
+            val = changes["Alcohol"]
+            scenario_data["Alcohol_Status"] = "Never" if val == 0 else ("Occasional" if val <= 2 else "Regular")
+            
+    # 3. 이미 잘 만들어진 기존 예측 함수 재사용
     new_risk = predict_cancer_risk(scenario_data, cancer_type)
+    
     return new_risk
 
 # --- [기존] 3. 통합 예측 인터페이스 (수정 없음) ---
@@ -227,6 +282,56 @@ def predict_scenario(current_data, change_key, change_value, cancer_type):
 
 import json
 
+def detect_simulation_intent(user_input, client):
+    """
+    사용자의 질문이 '현재 상태 입력'인지 '미래/가정(Simulation)'인지 판단하는 함수
+    """
+    system_prompt = """
+    너는 헬스케어 AI의 '의도 분석기'야. 사용자의 입력이 "가정(Simulation)"인지 "단순 정보 제공"인지 판단해서 JSON으로 반환해.
+
+    [판단 기준]
+    1. Simulation (가정): "만약 ~라면?", "~하면 어때?", "나중에 ~하면?", "50살이 되면?", "담배 끊으면?" 같이 조건 변경이나 미래 예측을 묻는 경우.
+    2. None (정보 제공): "나 30살이야", "담배 안 펴", "키 170이야" 같이 자신의 현재 정보를 설명하는 경우.
+
+    [JSON 출력 형식]
+    - Simulation일 때: {"type": "simulation", "changes": {"필드명": 값}}
+    - 아닐 때: {"type": "none"}
+
+    [필드명 매핑 규칙] (반드시 이 영문 키를 사용해!)
+    - 나이 -> Age (정수)
+    - 성별 -> Gender (0:남, 1:여)
+    - 담배/흡연 -> Smoking (0:안함, 1:함)
+    - 술/음주 -> Alcohol (0:안함 ~ 5:매일)
+    - 운동 -> PhysicalActivity (0:안함 ~ 10:매일)  <-- 중요: Exercise라고 쓰지 마!
+    - 가족력 -> Family_History (0:없음, 1:있음)
+    - BMI -> BMI
+
+    [예시]
+    User: "50살에 담배 피면 암 걸릴까?"
+    Output: {"type": "simulation", "changes": {"Age": 50, "Smoking": 1}}
+
+    User: "운동 안 하고 술 매일 마시면?"
+    Output: {"type": "simulation", "changes": {"PhysicalActivity": 0, "Alcohol": 5}}
+
+    User: "나 지금 24살이고 여자야."
+    Output: {"type": "none"}
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0  # 의도 파악은 정확해야 하므로 창의성(temperature)을 0으로 설정
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"❌ 의도 파악 중 에러: {e}")
+        return {"type": "none"}
+    
 # --- 7. GPT 정보 추출 함수 (사용자 입력 -> JSON) ---
 def gpt_extraction(messages, user_input, client):
     """
@@ -237,11 +342,11 @@ def gpt_extraction(messages, user_input, client):
     알 수 없는 정보는 null로 표시해.
     추출 대상: Age, Gender(남:0, 여:1), BMI, Smoking(안함:0, 함:1), Alcohol(0~5), Family_History(0,1), PhysicalActivity(0~10)
     추출 대상(간암): Alcohol_Status(Never, Occasional, Regular), Smoking_Status(Never, Former, Current), Hepatitis_B, Hepatitis_C, Cirrhosis, Diabetes, PhysicalActivity_Level(Low, Moderate, High)
-    추출 대상(폐암): Air_Pollution, Dust_Allergy, Occupational_Hazards, Genetic_Risk, Chronic_Disease, Balanced_Diet, Obesity_Score, Passive_Smoker, Chest_Pain, Cough_Blood
+    추출 대상(폐암): Air_Pollution(1~8), Dust_Allergy(1~8), Occupational_Hazards(1~8), Genetic_Risk(1~8), Chronic_Disease(1~8), Balanced_Diet(1~8), Obesity_Score(1~8), Passive_Smoker(1~8), Chest_Pain(1~8), Weight_Loss(1~8), Shortness_Breath(1~8), Dry_Cough(1~8)
     """
     
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_input}
