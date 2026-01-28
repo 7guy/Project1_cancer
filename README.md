@@ -16,9 +16,26 @@
 기존 단순 정보 제공형 서비스와 달리,
 단계적 분석 구조를 통해 사용자 맞춤형 위험도 판단을 제공하는 것이 특징입니다.
 
+#### 시스템 흐름
+
+- 사용자 기본 정보 및 증상 입력
+- 통합 암 위험도 1차 분석
+- 사용자 선택 시 폐암·간암 정밀 판단 수행
+- 머신러닝 예측 결과 도출
+- LLM을 활용한 결과 해석 및 사용자 안내
+
 #### 기대 효과
 
 - 사용자가 자신의 암 위험 요인을 사전에 인지
 - 생활 습관 개선 및 건강 관리에 활용 가능
 - 병원 방문 전 참고용 판단 자료로 활용 가능
 - 머신러닝과 LLM을 결합한 실무 활용 가능 AI 서비스 사례 제시
+
+#### 사용 데이터
+캐글
+1. 암 데이터
+  - https://www.kaggle.com/datasets/rabieelkharoua/cancer-prediction-dataset
+2. 간암 데이터
+  - https://www.kaggle.com/datasets/miadul/predict-liver-cancer-from-and-clinical-features
+3. 폐암 데이터
+  - https://www.kaggle.com/datasets/thedevastator/cancer-patients-and-air-pollution-a-new-link
