@@ -154,8 +154,17 @@ def predict_cancer_risk(raw_data, cancer_type="TOTAL"):
             
         elif cancer_type == "LUNG":
             model = res["LUNG"]["model"]
-            # input_df를 전달하여 Warning 해결 및 0% 탈출
-            prob = model.predict_proba(input_df)[0][1]
+            pred_class = model.predict(input_df)[0]
+
+            # 위험군 → 퍼센트 매핑 (UI용)
+            class_to_score = {
+                0: 10.0,   # Low
+                1: 30.0,   # Medium
+                2: 60.0    # High
+            }
+
+            prob = class_to_score.get(pred_class, 30.0) / 100
+
             
         else: # TOTAL
             model = res["TOTAL"]["model"]
