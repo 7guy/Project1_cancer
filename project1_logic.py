@@ -188,11 +188,13 @@ def get_missing_info_question(collected_data, cancer_type):
         
         # 폐암 (프롬프트에 적힌 상세 항목 추가)
         "LUNG": [
-            "Age", "Gender", "Smoking", "Passive_Smoker",
-            "Air_Pollution", "Dust_Allergy", "Occupational_Hazards", 
-            "Genetic_Risk", "Chronic_Disease", "Balanced_Diet", 
-            "Obesity_Score", "Chest_Pain"
+            "Chronic_Disease",
+            "Chest_Pain",
+            "Weight_Loss",
+            "Shortness_Breath",
+            "Dry_Cough"
         ]
+
     }
     
     # 2. 누락된 항목 찾기
@@ -226,15 +228,12 @@ def get_missing_info_question(collected_data, cancer_type):
         "PhysicalActivity_Level": "활동 강도(상/중/하)",
 
         # 폐암 상세
-        "Passive_Smoker": "간접 흡연 노출 여부",
-        "Air_Pollution": "공기 오염 노출 정도", 
-        "Dust_Allergy": "먼지 알레르기 여부", 
-        "Occupational_Hazards": "직업적 위험 요소 노출", 
-        "Genetic_Risk": "폐암 유전적 위험도", 
-        "Chronic_Disease": "만성 폐질환 여부", 
-        "Balanced_Diet": "균형 잡힌 식단 여부", 
-        "Obesity_Score": "비만도", 
-        "Chest_Pain": "흉통(가슴 통증) 유무"
+        "Chronic_Disease": "만성 폐질환 여부",
+        "Chest_Pain": "흉통(가슴 통증)",
+        "Weight_Loss": "체중 감소",
+        "Shortness_Breath": "호흡 곤란",
+        "Dry_Cough": "마른 기침"
+
     }
     
     # 질문 만들기
@@ -250,6 +249,17 @@ def get_missing_info_question(collected_data, cancer_type):
             return f"정밀한 분석을 위해 다음 정보들이 더 필요해요! 🧐\n\n{list_str}"
         else:
             return f"정확한 분석을 위해 **{', '.join(missing_labels)}** 정보를 알려주시겠어요?"
+        
+# --- [추가] 5. 사용자의 후속 질문 의도 판별 ---
+def classify_intent(user_input):
+    """
+    사용자의 추가 질문이 '가정(What-if)'인지 '타 암종 상세분석'인지 판별
+    (이 기능은 GPT 프롬프트에 포함시켜 JSON으로 받는 것이 가장 정확하지만, 
+    로직상 분류 기준을 세워둡니다.)
+    """
+    # 실제 구현은 app.py 내의 gpt_extraction 시 시스템 프롬프트에 
+    # 'intent': 'what_if' | 'detail_request' | 'general' 을 추가하도록 설정합니다.
+    pass
 
 # --- [추가] 6. '만약에' 시나리오 재계산 로직 ---
 def predict_scenario(current_data, changes, cancer_type):
